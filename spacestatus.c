@@ -38,18 +38,42 @@ void send_msg(Display *disp, Window tray, long msg, long data1, long data2, long
     XSync(disp, False);
 }
 
-int connect_api(int sock, struct addrinfo *res)
+int connect_api(int *sock, char *dest, char *port)
 {
-    struct addrinfo *iter;
-    int ret;
+    struct addrinfo hints, *iter, *res;
+    int ret, sockopt;
+
+    if((*sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
+    {
+        perror("Failed to create socket");
+        return 6;
+    }
+    
+    sockopt = 1;
+    setsockopt(*sock, SOL_SOCKET, SO_REUSEADDR, &sockopt, sizeof(sockopt));
+    
+    memset(&hints, 0, sizeof(hints));
+    hints.ai_family = AF_INET;
+    hints.ai_socktype = SOCK_STREAM;
+    
+    if((ret = getaddrinfo(dest, port, &hints, &res)))
+    {
+        printf("Failed to resolve destination: %s\n", gai_strerror(ret));
+        return 7;
+    }
     
     for(iter = res; iter; iter = iter->ai_next)
     {
-        ret = connect(sock, iter->ai_addr, iter->ai_addrlen);
+        ret = connect(*sock, iter->ai_addr, iter->ai_addrlen);
         if(!ret)
             break;
     }
-    return ret;
+    if(ret == -1)
+    {
+        perror("Failed to connect to destination");
+        return 8;
+    }
+    return 0;
 }
 
 char* request(int sock, char *host, char **dst, int *size)
@@ -65,7 +89,10 @@ char* request(int sock, char *host, char **dst, int *size)
     {
         ret = recv(sock, *dst+count, *size-count, 0);
         if(ret == -1)
+        {
+            perror("Failed to recv");
             return 0;
+        }
         count += ret;
         while(count == *size)
         {
@@ -73,7 +100,10 @@ char* request(int sock, char *host, char **dst, int *size)
             *dst = realloc(*dst, *size);
             ret = recv(sock, *dst+count, *size-count, 0);
             if(ret == -1)
+            {
+                perror("Failed to recv");
                 return 0;
+            }
             count += ret;
         }
         if(!len && (content = strstr(*dst, "\r\n\r\n")))
@@ -109,11 +139,10 @@ int main(int argc, char *argv[])
     int refresh = 5*60;
     char *dest = 0, *port = "80";
     
-    int sockopt, ret;
-    struct addrinfo hints;
-    
     char *json;
     int size;
+    
+    int ret;
     
     while((opt = getopt(argc, argv, "r:h")) != -1)
     {
@@ -192,29 +221,8 @@ int main(int argc, char *argv[])
         32, PropModeReplace, (unsigned char*)info, 2);
     */
     
-    if((sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
-    {
-        perror("Failed to create socket");
-        return 6;
-    }
-    
-    setsockopt(sock, SOL_SOCKET, SO_REUSEADDR, &sockopt, sizeof(sockopt));
-    
-    memset(&hints, 0, sizeof(hints));
-    hints.ai_family = AF_INET;
-    hints.ai_socktype = SOCK_STREAM;
-    
-    if((ret = getaddrinfo(dest, port, &hints, &res)))
-    {
-        printf("Failed to resolve destination: %s\n", gai_strerror(ret));
-        return 7;
-    }
-    
-    if(connect_api(sock, res) == -1)
-    {
-        perror("Failed to connect to destination");
-        return 8;
-    }
+    if((ret = connect_api(&sock, dest, port)))
+        return ret;
     
     size = 100;
     req = malloc(size);
@@ -230,22 +238,27 @@ int main(int argc, char *argv[])
     while(1)
     {
         if(strstr(json, "\"open\":true"))
+        {
+            printf("open\n");
             XPutImage(disp, icon, DefaultGC(disp, 0), open, 0, 0, 0, 0, open->width, open->height);
+        }
         else
+        {
+            printf("closed\n");
             XPutImage(disp, icon, DefaultGC(disp, 0), closed, 0, 0, 0, 0, closed->width, closed->height);
+        }
         XFlush(disp);
         
-        shutdown(sock, 2);
-        
+        close(sock);
         sleep(refresh);
         
         while(1)
         {
-            while(connect_api(sock, res) == -1)
+            while(connect_api(&sock, dest, port))
                 sleep(60);
             if((json = request(sock, dest, &req, &size)))
                 break;
-            shutdown(sock, 2);
+            close(sock);
             sleep(60);
         }
     }
