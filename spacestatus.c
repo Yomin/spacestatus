@@ -101,6 +101,32 @@ void send_data_msg(Display *disp, Window tray, Window icon, char *msg, int timeo
 
 #endif
 
+Window dock_tray(Display *disp, int screen, Window icon, Window root)
+{
+    Window tray;
+    char buf[100];
+    XEvent e;
+    
+    sprintf(buf, "_NET_SYSTEM_TRAY_S%i", screen);
+    tray = XGetSelectionOwner(disp, XInternAtom(disp, buf, False));
+    while(tray == None)
+    {
+        XSelectInput(disp, root, StructureNotifyMask);
+        printf("Waiting for Systray\n");
+        while(1)
+        {
+            XNextEvent(disp, &e);
+            if(e.xclient.message_type == XInternAtom(disp, "MANAGER", False))
+                break;
+        }
+        tray = XGetSelectionOwner(disp, XInternAtom(disp, buf, False));
+    }
+    
+    send_ctrl_msg(disp, tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
+    
+    return tray;
+}
+
 int connect_api(int *sock, char *dest, char *port)
 {
     struct addrinfo hints, *iter, *res;
@@ -195,7 +221,7 @@ void cleanup(int signal)
 int main(int argc, char *argv[])
 {
     Display *disp;
-    Window root, tray, icon;
+    Window root, icon;
     int screen;
     char buf[100], *ptr;
     XImage *img_open, *img_closed;
@@ -203,6 +229,7 @@ int main(int argc, char *argv[])
     
 #ifdef BUBBLE
     int msgid = 0;
+    Window tray;
 #endif
 #ifdef XEMBED
     unsigned long info[2];
@@ -271,15 +298,6 @@ int main(int argc, char *argv[])
     }
     
     screen = DefaultScreen(disp);
-    sprintf(buf, "_NET_SYSTEM_TRAY_S%i", screen);
-    
-    tray = XGetSelectionOwner(disp,
-        XInternAtom(disp, buf, False));
-    if(tray == None)
-    {
-        printf("No systemtray available\n");
-        return 3;
-    }
     
     root = RootWindow(disp, screen);
     icon = XCreateSimpleWindow(disp, root, 0, 0, 1, 1, 0, 0, 0);
@@ -300,7 +318,11 @@ int main(int argc, char *argv[])
         32, PropModeReplace, (unsigned char*)info, 2);
 #endif
     
-    send_ctrl_msg(disp, tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
+#ifdef BUBBLE
+    tray = dock_tray(disp, screen, icon, root);
+#else
+    dock_tray(disp, screen, icon, root);
+#endif
     
     readlink("/proc/self/exe", buf, 100);
     ptr = strrchr(buf, '/');
