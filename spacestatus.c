@@ -6,25 +6,38 @@
 #include <errno.h>
 #include <netdb.h>
 #include <signal.h>
+#include <libgen.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <X11/Xlib.h>
 #include <X11/xpm.h>
 
+#ifdef NOTIFY
+#   include <libnotify/notify.h>
+#endif
+
 #define SYSTEM_TRAY_REQUEST_DOCK    0
 #define SYSTEM_TRAY_BEGIN_MESSAGE   1
 #define SYSTEM_TRAY_CANCEL_MESSAGE  2
+
+#if defined NOTIFY || defined BUBBLE
+#   define OPTSTR "r:p:t:"
+#   define USAGE "Usage: %s [-r <min>] [-p <port>] [-t <sec>] <dest>\n"
+#else
+#   define OPTSTR "r:p:"
+#   define USAGE "Usage: %s [-r <min>] [-p <port>] <dest>\n"
+#endif
 
 int sock;
 struct addrinfo *res;
 char *req;
 
-void send_msg(Display *disp, Window tray, long msg, long data1, long data2, long data3)
+void send_ctrl_msg(Display *disp, Window tray, Window win, long msg, long data1, long data2, long data3)
 {
     XEvent e;
     
     e.xclient.type = ClientMessage;
-    e.xclient.window = tray;
+    e.xclient.window = win;
     e.xclient.message_type =
         XInternAtom(disp, "_NET_SYSTEM_TRAY_OPCODE", False);
     e.xclient.format = 32;
@@ -37,6 +50,35 @@ void send_msg(Display *disp, Window tray, long msg, long data1, long data2, long
     XSendEvent(disp, tray, False, NoEventMask, &e);
     XSync(disp, False);
 }
+
+#ifdef BUBBLE
+
+void send_data_msg(Display *disp, Window tray, Window icon, char *msg, int timeout, int msgid)
+{
+    XEvent e;
+    int len = strlen(msg);
+    
+    send_ctrl_msg(disp, tray, icon, SYSTEM_TRAY_BEGIN_MESSAGE,
+        timeout, len, msgid);
+
+    e.xclient.type = ClientMessage;
+    e.xclient.window = icon;
+    e.xclient.message_type =
+        XInternAtom(disp, "_NET_SYSTEM_TRAY_MESSAGE_DATA", False);
+    e.xclient.format = 8;
+    
+    while(len > 0)
+    {
+        memcpy(&e.xclient.data, msg, len > 20 ? 20 : len);
+        msg += 20;
+        len -= 20;
+        
+        XSendEvent(disp, tray, False, StructureNotifyMask, &e);
+        XSync(disp, False);
+    }
+}
+
+#endif
 
 int connect_api(int *sock, char *dest, char *port)
 {
@@ -123,6 +165,9 @@ void cleanup(int signal)
     close(sock);
     free(req);
     freeaddrinfo(res);
+#ifdef NOTIFY
+    notify_uninit();
+#endif
     exit(0);
 }
 
@@ -130,21 +175,34 @@ int main(int argc, char *argv[])
 {
     Display *disp;
     Window root, tray, icon;
-//    unsigned long info[2];
     int screen;
     char buf[100], *ptr;
-    XImage *open, *closed;
+    XImage *img_open, *img_closed;
+    XClassHint *hint;
+    
+#ifdef BUBBLE
+    int msgid = 0;
+#endif
+#ifdef XEMBED
+    unsigned long info[2];
+#endif
     
     int opt;
     int refresh = 5*60;
     char *dest = 0, *port = "80";
+#if defined NOTIFY || defined BUBBLE
+    int timeout = 3*1000;
+#endif
+#ifdef NOTIFY
+    NotifyNotification *notify_open, *notify_closed;
+#endif
     
     char *json;
     int size;
     
-    int ret;
+    int ret, open = 0;
     
-    while((opt = getopt(argc, argv, "r:h")) != -1)
+    while((opt = getopt(argc, argv, OPTSTR)) != -1)
     {
         switch(opt)
         {
@@ -164,12 +222,22 @@ int main(int argc, char *argv[])
             }
             port = optarg;
             break;
+#if defined NOTIFY || defined BUBBLE
+        case 't':
+            if(strspn(optarg, "1234567890") != strlen(optarg))
+            {
+                printf("timeout option not numeric\n");
+                return 1;
+            }
+            timeout = atoi(optarg)*1000;
+            break;
+#endif
         }
     }
     
     if(optind == argc)
     {
-        printf("Usage: %s [-r <min>] [-p <port>] <dest>\n", argv[0]);
+        printf(USAGE, argv[0]);
         return 1;
     }
     
@@ -195,31 +263,38 @@ int main(int argc, char *argv[])
     root = RootWindow(disp, screen);
     icon = XCreateSimpleWindow(disp, root, 0, 0, 1, 1, 0, 0, 0);
     
-    send_msg(disp, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
+    hint = XAllocClassHint();
+    hint->res_name = basename(argv[0]);
+    hint->res_class = "spacestatus";
+    XSetClassHint(disp, icon, hint);
+    XFree(hint);
+    XStoreName(disp, icon, "spacestatus");
     
-    readlink("/proc/self/exe", buf, 100);
-    ptr = strrchr(buf, '/');
-    strcpy(ptr+1, "closed.xpm");
-    if(XpmReadFileToImage(disp, buf, &closed, NULL, NULL))
-    {
-        printf("Failed to load closed.xpm\n");
-        return 4;
-    }
-    strcpy(ptr+1, "open.xpm");
-    if(XpmReadFileToImage(disp, buf, &open, NULL, NULL))
-    {
-        printf("Failed to load open.xpm\n");
-        return 5;
-    }
-    
-    /*
+#ifdef XEMBED
     info[0] = 0;
     info[1] = 1;
     XChangeProperty(disp, icon,
         XInternAtom(disp, "_XEMBED_INFO", False),
         XInternAtom(disp, "_XEMBED_INFO", False),
         32, PropModeReplace, (unsigned char*)info, 2);
-    */
+#endif
+    
+    send_ctrl_msg(disp, tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
+    
+    readlink("/proc/self/exe", buf, 100);
+    ptr = strrchr(buf, '/');
+    strcpy(ptr+1, "closed.xpm");
+    if(XpmReadFileToImage(disp, buf, &img_closed, NULL, NULL))
+    {
+        printf("Failed to load closed.xpm\n");
+        return 4;
+    }
+    strcpy(ptr+1, "open.xpm");
+    if(XpmReadFileToImage(disp, buf, &img_open, NULL, NULL))
+    {
+        printf("Failed to load open.xpm\n");
+        return 5;
+    }
     
     if((ret = connect_api(&sock, dest, port)))
         return ret;
@@ -235,17 +310,47 @@ int main(int argc, char *argv[])
     
     signal(SIGINT, cleanup);
     
+#ifdef NOTIFY
+    notify_init("spacestatus");
+    notify_open = notify_notification_new("space open", 0, "dialog-information");
+    notify_closed = notify_notification_new("space closed", 0, "dialog-information");
+    notify_notification_set_timeout(notify_open, timeout);
+    notify_notification_set_timeout(notify_closed, timeout);
+#endif
+    
     while(1)
     {
         if(strstr(json, "\"open\":true"))
         {
-            printf("open\n");
-            XPutImage(disp, icon, DefaultGC(disp, 0), open, 0, 0, 0, 0, open->width, open->height);
+            if(!open)
+            {
+                open = 1;
+                printf("open\n");
+                XPutImage(disp, icon, DefaultGC(disp, 0), img_open,
+                    0, 0, 0, 0, img_open->width, img_open->height);
+#ifdef BUBBLE
+                send_data_msg(disp, tray, icon, "space open", timeout, msgid++);
+#endif
+#ifdef NOTIFY
+                notify_notification_show(notify_open, NULL);
+#endif
+            }
         }
         else
         {
-            printf("closed\n");
-            XPutImage(disp, icon, DefaultGC(disp, 0), closed, 0, 0, 0, 0, closed->width, closed->height);
+            if(open)
+            {
+                open = 0;
+                printf("closed\n");
+                XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
+                    0, 0, 0, 0, img_closed->width, img_closed->height);
+#ifdef BUBBLE
+                send_data_msg(disp, tray, icon, "space closed", timeout, msgid++);
+#endif
+#ifdef NOTIFY
+                notify_notification_show(notify_closed, NULL);
+#endif
+            }
         }
         XFlush(disp);
         
