@@ -28,8 +28,10 @@
 #include <netdb.h>
 #include <signal.h>
 #include <libgen.h>
+#include <poll.h>
 #include <sys/socket.h>
 #include <sys/types.h>
+#include <sys/time.h>
 #include <X11/Xlib.h>
 #include <X11/xpm.h>
 
@@ -122,6 +124,7 @@ Window dock_tray(Display *disp, int screen, Window icon, Window root)
         tray = XGetSelectionOwner(disp, XInternAtom(disp, buf, False));
     }
     
+    XSelectInput(disp, icon, ExposureMask);
     send_ctrl_msg(disp, tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
     
     return tray;
@@ -220,13 +223,66 @@ void cleanup(int signal)
     exit(0);
 }
 
+int event_loop(Display *disp, Window icon, XImage *img, struct pollfd *pfds, int sec)
+{
+    XEvent e;
+    struct timeval now, than;
+    int msec = sec*1000;
+    
+    than.tv_sec = 0;
+    
+    while(1)
+    {
+        gettimeofday(&now, 0);
+        if(than.tv_sec)
+            msec -= (now.tv_sec-than.tv_sec)*1000
+                  + (now.tv_usec-than.tv_usec)/1000;
+        than = now;
+        
+        switch(poll(pfds, 1, msec))
+        {
+        case -1:
+            perror("Failed to poll display");
+            return 9;
+        case 0:
+            return 0;
+        default:
+            if(pfds[0].revents & POLLIN)
+            {
+                while(XPending(disp))
+                {
+                    XNextEvent(disp, &e);
+                    switch(e.xany.type)
+                    {
+                    case Expose:
+                        XPutImage(disp, icon, DefaultGC(disp, 0),
+                            img, 0, 0, 0, 0, img->width, img->height);
+                        XFlush(disp);
+                        break;
+                    }
+                }
+            }
+            else if(pfds[0].revents & POLLHUP)
+            {
+                printf("POLLHUP on display\n");
+                return 10;
+            }
+            else if(pfds[0].revents & POLLERR)
+            {
+                printf("POLLERR on display\n");
+                return 11;
+            }
+        }
+    }
+}
+
 int main(int argc, char *argv[])
 {
     Display *disp;
     Window root, icon;
     int screen;
     char buf[100], *ptr;
-    XImage *img_open, *img_closed;
+    XImage *img_open, *img_closed, *img_current;
     XClassHint *hint;
     
 #ifdef BUBBLE
@@ -250,7 +306,7 @@ int main(int argc, char *argv[])
     char *json;
     int size;
     
-    int open = 0;
+    int open = 0, ret;
     
     while((opt = getopt(argc, argv, OPTSTR)) != -1)
     {
@@ -346,9 +402,14 @@ int main(int argc, char *argv[])
     XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
         0, 0, 0, 0, img_closed->width, img_closed->height);
     XFlush(disp);
+    img_current = img_closed;
     
     size = 100;
     req = malloc(size);
+    
+    struct pollfd pfds;
+    pfds.fd = ConnectionNumber(disp);
+    pfds.events = POLLIN;
     
     signal(SIGINT, cleanup);
     
@@ -365,21 +426,24 @@ int main(int argc, char *argv[])
         while(1)
         {
             while(connect_api(&sock, dest, port))
-                sleep(60);
+                if((ret = event_loop(disp, icon, img_current, &pfds, 60)))
+                    return ret;
             if((json = request(sock, dest, &req, &size)))
                 break;
             close(sock);
-            sleep(60);
+            if((ret = event_loop(disp, icon, img_current, &pfds, 60)))
+                return ret;
         }
         
         if(strstr(json, "\"open\":true"))
         {
-            XPutImage(disp, icon, DefaultGC(disp, 0), img_open,
-                0, 0, 0, 0, img_open->width, img_open->height);
             if(!open)
             {
                 open = 1;
                 printf("open\n");
+                XPutImage(disp, icon, DefaultGC(disp, 0), img_open,
+                    0, 0, 0, 0, img_open->width, img_open->height);
+                img_current = img_open;
 #ifdef BUBBLE
                 send_data_msg(disp, tray, icon, "space open", timeout, msgid++);
 #endif
@@ -390,12 +454,13 @@ int main(int argc, char *argv[])
         }
         else
         {
-            XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
-                0, 0, 0, 0, img_closed->width, img_closed->height);
             if(open)
             {
                 open = 0;
                 printf("closed\n");
+                XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
+                    0, 0, 0, 0, img_closed->width, img_closed->height);
+                img_current = img_closed;
 #ifdef BUBBLE
                 send_data_msg(disp, tray, icon, "space closed", timeout, msgid++);
 #endif
@@ -407,7 +472,8 @@ int main(int argc, char *argv[])
         XFlush(disp);
         
         close(sock);
-        sleep(refresh);
+        if((ret = event_loop(disp, icon, img_current, &pfds, refresh)))
+            return ret;
     }
     
     return 0;
