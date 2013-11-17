@@ -103,6 +103,22 @@ void send_data_msg(Display *disp, Window tray, Window icon, char *msg, int timeo
 
 #endif
 
+Window create_icon(Display *disp, Window root, char *argv0)
+{
+    Window icon;
+    XClassHint *hint;
+    
+    icon = XCreateSimpleWindow(disp, root, 0, 0, 1, 1, 0, 0, 0);
+    hint = XAllocClassHint();
+    hint->res_name = basename(argv0);
+    hint->res_class = "spacestatus";
+    XSetClassHint(disp, icon, hint);
+    XFree(hint);
+    XStoreName(disp, icon, "spacestatus");
+    
+    return icon;
+}
+
 Window dock_tray(Display *disp, int screen, Window icon, Window root)
 {
     Window tray;
@@ -123,8 +139,10 @@ Window dock_tray(Display *disp, int screen, Window icon, Window root)
         }
         tray = XGetSelectionOwner(disp, XInternAtom(disp, buf, False));
     }
+    printf("docked\n");
     
     XSelectInput(disp, icon, ExposureMask);
+    XSelectInput(disp, tray, StructureNotifyMask);
     send_ctrl_msg(disp, tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
     
     return tray;
@@ -254,11 +272,13 @@ int event_loop(Display *disp, Window icon, XImage *img, struct pollfd *pfds, int
                     XNextEvent(disp, &e);
                     switch(e.xany.type)
                     {
-                    case Expose:
+                    case Expose: // icon
                         XPutImage(disp, icon, DefaultGC(disp, 0),
                             img, 0, 0, 0, 0, img->width, img->height);
                         XFlush(disp);
                         break;
+                    case DestroyNotify: // tray
+                        return -1;
                     }
                 }
             }
@@ -283,7 +303,6 @@ int main(int argc, char *argv[])
     int screen;
     char buf[100], *ptr;
     XImage *img_open, *img_closed, *img_current;
-    XClassHint *hint;
     
 #ifdef BUBBLE
     int msgid = 0;
@@ -306,7 +325,7 @@ int main(int argc, char *argv[])
     char *json;
     int size;
     
-    int open = 0, ret;
+    int open = 0, ret, sleeptime;
     
     while((opt = getopt(argc, argv, OPTSTR)) != -1)
     {
@@ -358,14 +377,7 @@ int main(int argc, char *argv[])
     screen = DefaultScreen(disp);
     
     root = RootWindow(disp, screen);
-    icon = XCreateSimpleWindow(disp, root, 0, 0, 1, 1, 0, 0, 0);
-    
-    hint = XAllocClassHint();
-    hint->res_name = basename(argv[0]);
-    hint->res_class = "spacestatus";
-    XSetClassHint(disp, icon, hint);
-    XFree(hint);
-    XStoreName(disp, icon, "spacestatus");
+    icon = create_icon(disp, root, argv[0]);
     
 #ifdef XEMBED
     info[0] = 0;
@@ -423,16 +435,13 @@ int main(int argc, char *argv[])
     
     while(1)
     {
-        while(1)
+        sleeptime = 60;
+        if(connect_api(&sock, dest, port))
+            goto sleep;
+        if(!(json = request(sock, dest, &req, &size)))
         {
-            while(connect_api(&sock, dest, port))
-                if((ret = event_loop(disp, icon, img_current, &pfds, 60)))
-                    return ret;
-            if((json = request(sock, dest, &req, &size)))
-                break;
             close(sock);
-            if((ret = event_loop(disp, icon, img_current, &pfds, 60)))
-                return ret;
+            goto sleep;
         }
         
         if(strstr(json, "\"open\":true"))
@@ -472,8 +481,28 @@ int main(int argc, char *argv[])
         XFlush(disp);
         
         close(sock);
-        if((ret = event_loop(disp, icon, img_current, &pfds, refresh)))
+        sleeptime = refresh;
+sleep:
+        switch((ret = event_loop(disp, icon, img_current, &pfds, sleeptime)))
+        {
+        case -1:
+            XDestroyWindow(disp, icon);
+            icon = create_icon(disp, root, argv[0]);
+#ifdef BUBBLE
+            tray = dock_tray(disp, screen, icon, root);
+#else
+            dock_tray(disp, screen, icon, root);
+#endif
+            sleep(1);
+            XPutImage(disp, icon, DefaultGC(disp, 0), img_current,
+                0, 0, 0, 0, img_current->width, img_current->height);
+            XFlush(disp);
+            break;
+        case 0:
+            break;
+        default:
             return ret;
+        }
     }
     
     return 0;
