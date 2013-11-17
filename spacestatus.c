@@ -148,6 +148,7 @@ int connect_api(int *sock, char *dest, char *port)
     if((ret = getaddrinfo(dest, port, &hints, &res)))
     {
         printf("Failed to resolve destination: %s\n", gai_strerror(ret));
+        close(*sock);
         return 7;
     }
     
@@ -157,9 +158,11 @@ int connect_api(int *sock, char *dest, char *port)
         if(!ret)
             break;
     }
+    freeaddrinfo(res);
     if(ret == -1)
     {
         perror("Failed to connect to destination");
+        close(*sock);
         return 8;
     }
     return 0;
@@ -211,7 +214,6 @@ void cleanup(int signal)
 {
     close(sock);
     free(req);
-    freeaddrinfo(res);
 #ifdef NOTIFY
     notify_uninit();
 #endif
@@ -248,7 +250,7 @@ int main(int argc, char *argv[])
     char *json;
     int size;
     
-    int ret, open = 0;
+    int open = 0;
     
     while((opt = getopt(argc, argv, OPTSTR)) != -1)
     {
@@ -339,9 +341,6 @@ int main(int argc, char *argv[])
         return 5;
     }
     
-    if((ret = connect_api(&sock, dest, port)))
-        return ret;
-    
     sleep(1); // wait until docked before drawing
     
     XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
@@ -350,12 +349,6 @@ int main(int argc, char *argv[])
     
     size = 100;
     req = malloc(size);
-    
-    if(!(json = request(sock, dest, &req, &size)))
-    {
-        perror("Failed to recv data");
-        return 9;
-    }
     
     signal(SIGINT, cleanup);
     
@@ -369,6 +362,16 @@ int main(int argc, char *argv[])
     
     while(1)
     {
+        while(1)
+        {
+            while(connect_api(&sock, dest, port))
+                sleep(60);
+            if((json = request(sock, dest, &req, &size)))
+                break;
+            close(sock);
+            sleep(60);
+        }
+        
         if(strstr(json, "\"open\":true"))
         {
             XPutImage(disp, icon, DefaultGC(disp, 0), img_open,
@@ -405,16 +408,6 @@ int main(int argc, char *argv[])
         
         close(sock);
         sleep(refresh);
-        
-        while(1)
-        {
-            while(connect_api(&sock, dest, port))
-                sleep(60);
-            if((json = request(sock, dest, &req, &size)))
-                break;
-            close(sock);
-            sleep(60);
-        }
     }
     
     return 0;
