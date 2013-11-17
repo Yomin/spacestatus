@@ -342,6 +342,12 @@ int main(int argc, char *argv[])
     if((ret = connect_api(&sock, dest, port)))
         return ret;
     
+    sleep(1); // wait until docked before drawing
+    
+    XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
+        0, 0, 0, 0, img_closed->width, img_closed->height);
+    XFlush(disp);
+    
     size = 100;
     req = malloc(size);
     
@@ -365,12 +371,12 @@ int main(int argc, char *argv[])
     {
         if(strstr(json, "\"open\":true"))
         {
+            XPutImage(disp, icon, DefaultGC(disp, 0), img_open,
+                0, 0, 0, 0, img_open->width, img_open->height);
             if(!open)
             {
                 open = 1;
                 printf("open\n");
-                XPutImage(disp, icon, DefaultGC(disp, 0), img_open,
-                    0, 0, 0, 0, img_open->width, img_open->height);
 #ifdef BUBBLE
                 send_data_msg(disp, tray, icon, "space open", timeout, msgid++);
 #endif
@@ -381,12 +387,12 @@ int main(int argc, char *argv[])
         }
         else
         {
+            XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
+                0, 0, 0, 0, img_closed->width, img_closed->height);
             if(open)
             {
                 open = 0;
                 printf("closed\n");
-                XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
-                    0, 0, 0, 0, img_closed->width, img_closed->height);
 #ifdef BUBBLE
                 send_data_msg(disp, tray, icon, "space closed", timeout, msgid++);
 #endif
