@@ -43,6 +43,10 @@
 #define SYSTEM_TRAY_BEGIN_MESSAGE   1
 #define SYSTEM_TRAY_CANCEL_MESSAGE  2
 
+#define PENDING 0
+#define OPEN    1
+#define CLOSED  2
+
 #if defined NOTIFY || defined BUBBLE
 #   define OPTSTR "r:p:t:"
 #   define USAGE "Usage: %s [-r <min>] [-p <port>] [-t <sec>] <dest>\n"
@@ -302,7 +306,7 @@ int main(int argc, char *argv[])
     Window root, icon;
     int screen;
     char buf[100], *ptr;
-    XImage *img_open, *img_closed, *img_current;
+    XImage *img_open, *img_closed, *img_pending, *img_current;
     
 #ifdef BUBBLE
     int msgid = 0;
@@ -325,7 +329,7 @@ int main(int argc, char *argv[])
     char *json;
     int size;
     
-    int open = 0, ret, sleeptime;
+    int status = PENDING, ret, sleeptime;
     
     while((opt = getopt(argc, argv, OPTSTR)) != -1)
     {
@@ -400,21 +404,27 @@ int main(int argc, char *argv[])
     if(XpmReadFileToImage(disp, buf, &img_closed, NULL, NULL))
     {
         printf("Failed to load closed.xpm\n");
-        return 4;
+        return 3;
     }
     strcpy(ptr+1, "open.xpm");
     if(XpmReadFileToImage(disp, buf, &img_open, NULL, NULL))
     {
         printf("Failed to load open.xpm\n");
+        return 4;
+    }
+    strcpy(ptr+1, "pending.xpm");
+    if(XpmReadFileToImage(disp, buf, &img_pending, NULL, NULL))
+    {
+        printf("Failed to load pending.xpm\n");
         return 5;
     }
     
     sleep(1); // wait until docked before drawing
     
-    XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
-        0, 0, 0, 0, img_closed->width, img_closed->height);
+    XPutImage(disp, icon, DefaultGC(disp, 0), img_pending,
+        0, 0, 0, 0, img_pending->width, img_pending->height);
     XFlush(disp);
-    img_current = img_closed;
+    img_current = img_pending;
     
     size = 100;
     req = malloc(size);
@@ -437,21 +447,25 @@ int main(int argc, char *argv[])
     {
         sleeptime = 60;
         if(connect_api(&sock, dest, port))
+        {
+            status = PENDING;
+            img_current = img_pending;
             goto sleep;
+        }
         if(!(json = request(sock, dest, &req, &size)))
         {
+            status = PENDING;
+            img_current = img_pending;
             close(sock);
             goto sleep;
         }
         
         if(strstr(json, "\"open\":true"))
         {
-            if(!open)
+            if(status != OPEN)
             {
-                open = 1;
+                status = OPEN;
                 printf("open\n");
-                XPutImage(disp, icon, DefaultGC(disp, 0), img_open,
-                    0, 0, 0, 0, img_open->width, img_open->height);
                 img_current = img_open;
 #ifdef BUBBLE
                 send_data_msg(disp, tray, icon, "space open", timeout, msgid++);
@@ -463,12 +477,10 @@ int main(int argc, char *argv[])
         }
         else
         {
-            if(open)
+            if(status != CLOSED)
             {
-                open = 0;
+                status = CLOSED;
                 printf("closed\n");
-                XPutImage(disp, icon, DefaultGC(disp, 0), img_closed,
-                    0, 0, 0, 0, img_closed->width, img_closed->height);
                 img_current = img_closed;
 #ifdef BUBBLE
                 send_data_msg(disp, tray, icon, "space closed", timeout, msgid++);
@@ -478,6 +490,9 @@ int main(int argc, char *argv[])
 #endif
             }
         }
+        
+        XPutImage(disp, icon, DefaultGC(disp, 0), img_current,
+            0, 0, 0, 0, img_current->width, img_current->height);
         XFlush(disp);
         
         close(sock);
@@ -494,9 +509,10 @@ sleep:
             dock_tray(disp, screen, icon, root);
 #endif
             sleep(1);
-            XPutImage(disp, icon, DefaultGC(disp, 0), img_current,
-                0, 0, 0, 0, img_current->width, img_current->height);
+            XPutImage(disp, icon, DefaultGC(disp, 0), img_pending,
+                0, 0, 0, 0, img_pending->width, img_pending->height);
             XFlush(disp);
+            status = PENDING;
             break;
         case 0:
             break;
