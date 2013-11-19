@@ -47,6 +47,7 @@
 #define PENDING 0
 #define OPEN    1
 #define CLOSED  2
+#define LOST    3
 
 #if defined NOTIFY || defined BUBBLE
 #   define OPTSTR "r:p:t:"
@@ -198,13 +199,23 @@ int connect_api(int *sock, char *dest, char *port)
     return 0;
 }
 
-char* request(int sock, char *host, char **dst, int *size)
+int strpfx(char *str, char *prefix)
+{
+    while(*str && *prefix && *str == *prefix)
+    {
+        str++;
+        prefix++;
+    }
+    return *prefix;
+}
+
+char* request(int sock, char *host, char *path, char **dst, int *size)
 {
     char req[100];
     int count = 0, ret, len = 0;
     char *ptr, *content;
     
-    sprintf(req, "GET /json HTTP/1.0\r\nHost: %s\r\n\r\n", host);
+    sprintf(req, "GET /%s HTTP/1.0\r\nHost: %s\r\n\r\n", path, host);
     send(sock, req, strlen(req), 0);
     
     while(!len || count < len)
@@ -325,7 +336,7 @@ int main(int argc, char *argv[])
     
     int opt;
     int refresh = 5*60;
-    char *dest = 0, *port = "80";
+    char *dest = 0, *port = "80", *path;
 #if defined NOTIFY || defined BUBBLE
     int timeout = 3*1000;
 #endif
@@ -378,6 +389,15 @@ int main(int argc, char *argv[])
     }
     
     dest = argv[optind];
+    if(!strpfx(dest, "http://"))
+        dest += strlen("http://");
+    path = strchr(dest, '/');
+    if(!path)
+    {
+        printf("Path to API JSON missing\n");
+        return 1;
+    }
+    *path++ = 0;
     
     if(!(disp = XOpenDisplay(NULL)))
     {
@@ -460,7 +480,7 @@ int main(int argc, char *argv[])
             img_current = img_pending;
             goto sleep;
         }
-        if(!(json = request(sock, dest, &req, &size)))
+        if(!(json = request(sock, dest, path, &req, &size)))
         {
             status = PENDING;
             img_current = img_pending;
@@ -483,7 +503,7 @@ int main(int argc, char *argv[])
 #endif
             }
         }
-        else
+        else if(strstr(json, "\"open\":false"))
         {
             if(status != CLOSED)
             {
@@ -496,6 +516,15 @@ int main(int argc, char *argv[])
 #ifdef NOTIFY
                 notify_notification_show(notify_closed, NULL);
 #endif
+            }
+        }
+        else
+        {
+            printf("JSON malformed\n");
+            if(status != LOST)
+            {
+                status = LOST;
+                img_current = img_pending;
             }
         }
         
