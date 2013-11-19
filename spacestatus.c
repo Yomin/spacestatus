@@ -59,8 +59,10 @@
 int sock;
 struct addrinfo *res;
 char *req;
+Display *disp;
+XImage *img_open, *img_closed, *img_pending, *img_current;
 
-void send_ctrl_msg(Display *disp, Window tray, Window win, long msg, long data1, long data2, long data3)
+void send_ctrl_msg(Window tray, Window win, long msg, long data1, long data2, long data3)
 {
     XEvent e;
     
@@ -81,12 +83,12 @@ void send_ctrl_msg(Display *disp, Window tray, Window win, long msg, long data1,
 
 #ifdef BUBBLE
 
-void send_data_msg(Display *disp, Window tray, Window icon, char *msg, int timeout, int msgid)
+void send_data_msg(Window tray, Window icon, char *msg, int timeout, int msgid)
 {
     XEvent e;
     int len = strlen(msg);
     
-    send_ctrl_msg(disp, tray, icon, SYSTEM_TRAY_BEGIN_MESSAGE,
+    send_ctrl_msg(tray, icon, SYSTEM_TRAY_BEGIN_MESSAGE,
         timeout, len, msgid);
 
     e.xclient.type = ClientMessage;
@@ -108,7 +110,7 @@ void send_data_msg(Display *disp, Window tray, Window icon, char *msg, int timeo
 
 #endif
 
-Window create_icon(Display *disp, Window root, char *argv0)
+Window create_icon(Window root, char *argv0)
 {
     Window icon;
     XClassHint *hint;
@@ -124,7 +126,7 @@ Window create_icon(Display *disp, Window root, char *argv0)
     return icon;
 }
 
-Window dock_tray(Display *disp, int screen, Window icon, Window root)
+Window dock_tray(int screen, Window icon, Window root)
 {
     Window tray;
     char buf[100];
@@ -148,7 +150,7 @@ Window dock_tray(Display *disp, int screen, Window icon, Window root)
     
     XSelectInput(disp, icon, ExposureMask);
     XSelectInput(disp, tray, StructureNotifyMask);
-    send_ctrl_msg(disp, tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
+    send_ctrl_msg(tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
     
     return tray;
 }
@@ -245,10 +247,14 @@ void cleanup(int signal)
 #ifdef NOTIFY
     notify_uninit();
 #endif
+    XDestroyImage(img_closed);
+    XDestroyImage(img_open);
+    XDestroyImage(img_pending);
+    XCloseDisplay(disp);
     exit(0);
 }
 
-int event_loop(Display *disp, Window icon, XImage *img, struct pollfd *pfds, int sec)
+int event_loop(Window icon, XImage *img, struct pollfd *pfds, int sec)
 {
     XEvent e;
     struct timeval now, than;
@@ -305,11 +311,9 @@ int event_loop(Display *disp, Window icon, XImage *img, struct pollfd *pfds, int
 
 int main(int argc, char *argv[])
 {
-    Display *disp;
     Window root, icon;
     int screen;
     char buf[100], *ptr;
-    XImage *img_open, *img_closed, *img_pending, *img_current;
     
 #ifdef BUBBLE
     int msgid = 0;
@@ -384,7 +388,7 @@ int main(int argc, char *argv[])
     screen = DefaultScreen(disp);
     
     root = RootWindow(disp, screen);
-    icon = create_icon(disp, root, argv[0]);
+    icon = create_icon(root, argv[0]);
     
 #ifdef XEMBED
     info[0] = 0;
@@ -396,11 +400,12 @@ int main(int argc, char *argv[])
 #endif
     
 #ifdef BUBBLE
-    tray = dock_tray(disp, screen, icon, root);
+    tray = dock_tray(screen, icon, root);
 #else
-    dock_tray(disp, screen, icon, root);
+    dock_tray(screen, icon, root);
 #endif
     
+    memset(buf, 0, 100);
     readlink("/proc/self/exe", buf, 100);
     ptr = strrchr(buf, '/');
     strcpy(ptr+1, "closed.xpm");
@@ -471,7 +476,7 @@ int main(int argc, char *argv[])
                 printf("open\n");
                 img_current = img_open;
 #ifdef BUBBLE
-                send_data_msg(disp, tray, icon, "space open", timeout, msgid++);
+                send_data_msg(tray, icon, "space open", timeout, msgid++);
 #endif
 #ifdef NOTIFY
                 notify_notification_show(notify_open, NULL);
@@ -486,7 +491,7 @@ int main(int argc, char *argv[])
                 printf("closed\n");
                 img_current = img_closed;
 #ifdef BUBBLE
-                send_data_msg(disp, tray, icon, "space closed", timeout, msgid++);
+                send_data_msg(tray, icon, "space closed", timeout, msgid++);
 #endif
 #ifdef NOTIFY
                 notify_notification_show(notify_closed, NULL);
@@ -501,15 +506,15 @@ int main(int argc, char *argv[])
         close(sock);
         sleeptime = refresh;
 sleep:
-        switch((ret = event_loop(disp, icon, img_current, &pfds, sleeptime)))
+        switch((ret = event_loop(icon, img_current, &pfds, sleeptime)))
         {
         case -1:
             XDestroyWindow(disp, icon);
-            icon = create_icon(disp, root, argv[0]);
+            icon = create_icon(root, argv[0]);
 #ifdef BUBBLE
-            tray = dock_tray(disp, screen, icon, root);
+            tray = dock_tray(screen, icon, root);
 #else
-            dock_tray(disp, screen, icon, root);
+            dock_tray(screen, icon, root);
 #endif
             sleep(1);
             XPutImage(disp, icon, DefaultGC(disp, 0), img_pending,
