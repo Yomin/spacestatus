@@ -29,6 +29,7 @@
 #include <signal.h>
 #include <libgen.h>
 #include <poll.h>
+#include <resolv.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -156,7 +157,7 @@ int connect_api(int *sock, char *dest, char *port)
 {
     struct addrinfo hints, *iter, *res;
     int ret, sockopt;
-
+    
     if((*sock = socket(AF_INET, SOCK_STREAM, 0)) == -1)
     {
         perror("Failed to create socket");
@@ -169,6 +170,8 @@ int connect_api(int *sock, char *dest, char *port)
     memset(&hints, 0, sizeof(hints));
     hints.ai_family = AF_INET;
     hints.ai_socktype = SOCK_STREAM;
+    
+    res_init();
     
     if((ret = getaddrinfo(dest, port, &hints, &res)))
     {
