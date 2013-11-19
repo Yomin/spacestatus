@@ -281,6 +281,9 @@ int event_loop(Window icon, XImage *img, struct pollfd *pfds, int sec)
                   + (now.tv_usec-than.tv_usec)/1000;
         than = now;
         
+        if(msec <= 0)
+            return 0;
+        
         switch(poll(pfds, 1, msec))
         {
         case -1:
