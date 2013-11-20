@@ -232,6 +232,7 @@ void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff
         x = attr_root.width-xchar.width;
     
     XMoveResizeWindow(disp, tooltip, x, stuff->y, xchar.width, ascent+descent);
+    XRaiseWindow(disp, tooltip);
     XMapWindow(disp, tooltip);
     XDrawImageString(disp, tooltip, gc, BORDER*2, ascent, buf, len);
 }
