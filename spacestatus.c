@@ -56,7 +56,7 @@
 #   define OPTSTR "r:p:y:c:b:f:t:"
 #   define USAGE "Usage: %s [-r <min>] [-p <port>] [-t <sec>]\n" \
                  "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>] <dest>\n"
-#   define NOTIFYBUBBLE1(...) __ARGS__
+#   define NOTIFYBUBBLE1(...) __VA_ARGS__
 #else
 #   define OPTSTR "r:p:y:c:b:f:"
 #   define USAGE "Usage: %s [-r <min>] [-p <port>]\n" \
@@ -65,17 +65,17 @@
 #endif
 
 #ifdef NOTIFY
-#   define NOTIFY1(...) __ARGS__
+#   define NOTIFY1(...) __VA_ARGS__
 #else
 #   define NOTIFY1(...)
 #endif
 #ifdef BUBBLE
-#   define BUBBLE1(...) __ARGS__
+#   define BUBBLE1(...) __VA_ARGS__
 #else
 #   define BUBBLE1(...)
 #endif
 #ifdef XEMBED
-#   define XEMBED1(...) __ARGS__
+#   define XEMBED1(...) __VA_ARGS__
 #else
 #   define XEMBED1(...)
 #endif
