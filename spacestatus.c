@@ -30,6 +30,7 @@
 #include <libgen.h>
 #include <poll.h>
 #include <resolv.h>
+#include <time.h>
 #include <sys/socket.h>
 #include <sys/types.h>
 #include <sys/time.h>
@@ -49,19 +50,50 @@
 #define CLOSED  2
 #define LOST    3
 
+#define BORDER 3 // tooltip
+
 #if defined NOTIFY || defined BUBBLE
-#   define OPTSTR "r:p:t:"
-#   define USAGE "Usage: %s [-r <min>] [-p <port>] [-t <sec>] <dest>\n"
+#   define OPTSTR "r:p:y:c:b:f:t:"
+#   define USAGE "Usage: %s [-r <min>] [-p <port>] [-t <sec>]\n" \
+                 "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>] <dest>\n"
+#   define NOTIFYBUBBLE1(...) __ARGS__
 #else
-#   define OPTSTR "r:p:"
-#   define USAGE "Usage: %s [-r <min>] [-p <port>] <dest>\n"
+#   define OPTSTR "r:p:y:c:b:f:"
+#   define USAGE "Usage: %s [-r <min>] [-p <port>]\n" \
+                 "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>] <dest>\n"
+#   define NOTIFYBUBBLE1(...)
 #endif
+
+#ifdef NOTIFY
+#   define NOTIFY1(...) __ARGS__
+#else
+#   define NOTIFY1(...)
+#endif
+#ifdef BUBBLE
+#   define BUBBLE1(...) __ARGS__
+#else
+#   define BUBBLE1(...)
+#endif
+#ifdef XEMBED
+#   define XEMBED1(...) __ARGS__
+#else
+#   define XEMBED1(...)
+#endif
+
+struct tooltip_stuff
+{
+    unsigned long fg_color, bg_color;
+    int y, font_set, status;
+    Font font;
+    time_t timestamp;
+};
 
 int sock;
 struct addrinfo *res;
 char *req;
 Display *disp;
 XImage *img_open, *img_closed, *img_pending, *img_current;
+GC gc;
 
 void send_ctrl_msg(Window tray, Window win, long msg, long data1, long data2, long data3)
 {
@@ -124,7 +156,84 @@ Window create_icon(Window root, char *argv0)
     XFree(hint);
     XStoreName(disp, icon, "spacestatus");
     
+    XSelectInput(disp, icon, ExposureMask|EnterWindowMask|LeaveWindowMask);
+    
     return icon;
+}
+
+Window create_tooltip(Window root, int screen, struct tooltip_stuff *stuff)
+{
+    Window tooltip;
+    XSetWindowAttributes attr;
+    XGCValues gcval;
+    
+    attr.override_redirect = 1;
+    attr.background_pixel = stuff->bg_color;
+    
+    tooltip = XCreateWindow(disp, root, 0, 0, 1, 1, 0, 0, InputOutput,
+        CopyFromParent, CWOverrideRedirect|CWBackPixel, &attr);
+    
+    gcval.foreground = stuff->fg_color;
+    gcval.background = stuff->bg_color;
+    if(stuff->font_set)
+    {
+        gcval.font = stuff->font;
+        gc = XCreateGC(disp, tooltip, GCForeground|GCBackground|GCFont, &gcval);
+    }
+    else
+        gc = XCreateGC(disp, tooltip, GCForeground|GCBackground, &gcval);
+    
+    XSelectInput(disp, tooltip, ExposureMask);
+    
+    return tooltip;
+}
+
+void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff *stuff)
+{
+    int sec, len, dir, ascent, descent, x;
+    char buf[100];
+    XCharStruct xchar;
+    XWindowAttributes attr_root, attr_tray;
+    
+    if(!stuff->timestamp)
+        stuff->status = LOST;
+    switch(stuff->status)
+    {
+    case PENDING:
+        strcpy(buf, "pending...");
+        break;
+    case OPEN:
+        sec = difftime(time(0), stuff->timestamp);
+        sprintf(buf, "open for %02i:%02i:%02i", sec/3600, (sec/60)%60, sec%60);
+        break;
+    case CLOSED:
+        sec = difftime(time(0), stuff->timestamp);
+        sprintf(buf, "closed for %02i:%02i:%02i", sec/3600, (sec/60)%60, sec%60);
+        break;
+    case LOST:
+        strcpy(buf, "my json parsing seems terrible :(");
+        break;
+    }
+    len = strlen(buf);
+    
+    XGetWindowAttributes(disp, root, &attr_root);
+    XGetWindowAttributes(disp, tray, &attr_tray);
+    
+    XQueryTextExtents(disp, XGContextFromGC(gc), buf, len,
+        &dir, &ascent, &descent, &xchar);
+    
+    ascent += BORDER;
+    descent += BORDER;
+    xchar.width += BORDER*4;
+    x = attr_tray.x+attr_tray.width/2-xchar.width/2;
+    if(x < 0)
+        x = 0;
+    if(x+xchar.width > attr_root.width)
+        x = attr_root.width-xchar.width;
+    
+    XMoveResizeWindow(disp, tooltip, x, stuff->y, xchar.width, ascent+descent);
+    XMapWindow(disp, tooltip);
+    XDrawImageString(disp, tooltip, gc, BORDER*2, ascent, buf, len);
 }
 
 Window dock_tray(int screen, Window icon, Window root)
@@ -149,7 +258,6 @@ Window dock_tray(int screen, Window icon, Window root)
     }
     printf("docked\n");
     
-    XSelectInput(disp, icon, ExposureMask);
     XSelectInput(disp, tray, StructureNotifyMask);
     send_ctrl_msg(tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
     
@@ -255,17 +363,16 @@ void cleanup(int signal)
 {
     close(sock);
     free(req);
-#ifdef NOTIFY
-    notify_uninit();
-#endif
+    NOTIFY1(notify_uninit());
     XDestroyImage(img_closed);
     XDestroyImage(img_open);
     XDestroyImage(img_pending);
+    XFreeGC(disp, gc);
     XCloseDisplay(disp);
     exit(0);
 }
 
-int event_loop(Window icon, XImage *img, struct pollfd *pfds, int sec)
+int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *img, struct tooltip_stuff *tstuff, struct pollfd *pfds, int sec)
 {
     XEvent e;
     struct timeval now, than;
@@ -299,10 +406,21 @@ int event_loop(Window icon, XImage *img, struct pollfd *pfds, int sec)
                     XNextEvent(disp, &e);
                     switch(e.xany.type)
                     {
-                    case Expose: // icon
-                        XPutImage(disp, icon, DefaultGC(disp, 0),
-                            img, 0, 0, 0, 0, img->width, img->height);
-                        XFlush(disp);
+                    case Expose: // icon/tooltip
+                        if(((XExposeEvent*)&e)->window == icon)
+                        {
+                            XPutImage(disp, icon, DefaultGC(disp, DefaultScreen(disp)),
+                                img, 0, 0, 0, 0, img->width, img->height);
+                            XFlush(disp);
+                        }
+                        else
+                            show_tooltip(root, tray, tooltip, tstuff);
+                        break;
+                    case EnterNotify: // icon
+                        show_tooltip(root, tray, tooltip, tstuff);
+                        break;
+                    case LeaveNotify: // icon
+                        XUnmapWindow(disp, tooltip);
                         break;
                     case DestroyNotify: // tray
                         return -1;
@@ -323,62 +441,108 @@ int event_loop(Window icon, XImage *img, struct pollfd *pfds, int sec)
     }
 }
 
+void check_num_option(char *arg, char *name)
+{
+    if(strspn(optarg, "1234567890") != strlen(arg))
+    {
+        printf("%s option not numeric\n", name);
+        exit(1);
+    }
+}
+
+unsigned long parse_color(int screen, char *arg, char *name)
+{
+    int len;
+    char buf[12];
+    XColor color;
+    
+    if(*arg == '#')
+        arg++;
+    len = strlen(arg);
+    if(len != 6 || strspn(arg, "1234567890abcdefABCDEF") != len)
+    {
+        printf("%s option no hex RGB value\n", name);
+        exit(1);
+    }
+    sprintf(buf, "rgb:%.2s/%.2s/%.2s", arg, arg+2, arg+4);
+    XParseColor(disp, DefaultColormap(disp, screen), buf, &color);
+    XAllocColor(disp, DefaultColormap(disp, screen), &color);
+    return color.pixel;
+}
+
 int main(int argc, char *argv[])
 {
-    Window root, icon;
+    // xlib
+    Window root, tray, icon, tooltip;
     int screen;
-    char buf[100], *ptr;
+    BUBBLE1(int msgid = 0);
+    XEMBED1(unsigned long info[2]);
     
-#ifdef BUBBLE
-    int msgid = 0;
-    Window tray;
-#endif
-#ifdef XEMBED
-    unsigned long info[2];
-#endif
-    
+    // args
     int opt;
     int refresh = 5*60;
     char *dest = 0, *port = "80", *path;
-#if defined NOTIFY || defined BUBBLE
-    int timeout = 3*1000;
-#endif
-#ifdef NOTIFY
-    NotifyNotification *notify_open, *notify_closed;
-#endif
+    struct tooltip_stuff tstuff;
+    NOTIFYBUBBLE1(int timeout = 3*1000);
     
-    char *json;
-    int size;
+    // else
+    int status = PENDING, sleeptime;
+    NOTIFY1(NotifyNotification *notify_open, *notify_closed);
     
-    int status = PENDING, ret, sleeptime;
+    // tmp
+    int ret, json_size;
+    char buf[100], *ptr, *json;
+    char **fonts;
+    
+    if(!(disp = XOpenDisplay(NULL)))
+    {
+        printf("Failed to open display\n");
+        return 2;
+    }
+    
+    screen = DefaultScreen(disp);
+    
+    tstuff.fg_color = WhitePixel(disp, 0);
+    tstuff.bg_color = BlackPixel(disp, 0);
+    tstuff.y = 65;
+    tstuff.font_set = 0;
     
     while((opt = getopt(argc, argv, OPTSTR)) != -1)
     {
         switch(opt)
         {
         case 'r':
-            if(strspn(optarg, "1234567890") != strlen(optarg))
-            {
-                printf("refresh option not numeric\n");
-                return 1;
-            }
+            check_num_option(optarg, "refresh");
             refresh = atoi(optarg)*60;
             break;
         case 'p':
-            if(strspn(optarg, "1234567890") != strlen(optarg))
+            check_num_option(optarg, "port");
+            port = optarg;
+            break;
+        case 'y':
+            check_num_option(optarg, "tooltip y position");
+            tstuff.y = atoi(optarg);
+            break;
+        case 'c':
+            tstuff.fg_color = parse_color(screen, optarg, "foregound color");
+            break;
+        case 'b':
+            tstuff.bg_color = parse_color(screen, optarg, "backgound color");
+            break;
+        case 'f':
+            fonts = XListFonts(disp, optarg, 1, &ret);
+            if(!fonts)
             {
-                printf("port option not numeric\n");
+                printf("No matching font found\n");
                 return 1;
             }
-            port = optarg;
+            XFreeFontNames(fonts);
+            tstuff.font = XLoadFont(disp, optarg);
+            tstuff.font_set = 1;
             break;
 #if defined NOTIFY || defined BUBBLE
         case 't':
-            if(strspn(optarg, "1234567890") != strlen(optarg))
-            {
-                printf("timeout option not numeric\n");
-                return 1;
-            }
+            check_num_option(optarg, "timeout");
             timeout = atoi(optarg)*1000;
             break;
 #endif
@@ -402,16 +566,9 @@ int main(int argc, char *argv[])
     }
     *path++ = 0;
     
-    if(!(disp = XOpenDisplay(NULL)))
-    {
-        printf("Failed to open display\n");
-        return 2;
-    }
-    
-    screen = DefaultScreen(disp);
-    
     root = RootWindow(disp, screen);
     icon = create_icon(root, argv[0]);
+    tooltip = create_tooltip(root, screen, &tstuff);
     
 #ifdef XEMBED
     info[0] = 0;
@@ -422,11 +579,7 @@ int main(int argc, char *argv[])
         32, PropModeReplace, (unsigned char*)info, 2);
 #endif
     
-#ifdef BUBBLE
     tray = dock_tray(screen, icon, root);
-#else
-    dock_tray(screen, icon, root);
-#endif
     
     memset(buf, 0, 100);
     readlink("/proc/self/exe", buf, 100);
@@ -452,13 +605,13 @@ int main(int argc, char *argv[])
     
     sleep(1); // wait until docked before drawing
     
-    XPutImage(disp, icon, DefaultGC(disp, 0), img_pending,
+    XPutImage(disp, icon, DefaultGC(disp, screen), img_pending,
         0, 0, 0, 0, img_pending->width, img_pending->height);
     XFlush(disp);
     img_current = img_pending;
     
-    size = 100;
-    req = malloc(size);
+    json_size = 100;
+    req = malloc(json_size);
     
     struct pollfd pfds;
     pfds.fd = ConnectionNumber(disp);
@@ -483,7 +636,7 @@ int main(int argc, char *argv[])
             img_current = img_pending;
             goto sleep;
         }
-        if(!(json = request(sock, dest, path, &req, &size)))
+        if(!(json = request(sock, dest, path, &req, &json_size)))
         {
             status = PENDING;
             img_current = img_pending;
@@ -498,13 +651,11 @@ int main(int argc, char *argv[])
                 status = OPEN;
                 printf("open\n");
                 img_current = img_open;
-#ifdef BUBBLE
-                send_data_msg(tray, icon, "space open", timeout, msgid++);
-#endif
-#ifdef NOTIFY
-                notify_notification_show(notify_open, NULL);
-#endif
+                BUBBLE1(send_data_msg(tray, icon, "space open", timeout, msgid++));
+                NOTIFY1(notify_notification_show(notify_open, NULL));
             }
+            else
+                goto close;
         }
         else if(strstr(json, "\"open\":false"))
         {
@@ -513,13 +664,11 @@ int main(int argc, char *argv[])
                 status = CLOSED;
                 printf("closed\n");
                 img_current = img_closed;
-#ifdef BUBBLE
-                send_data_msg(tray, icon, "space closed", timeout, msgid++);
-#endif
-#ifdef NOTIFY
-                notify_notification_show(notify_closed, NULL);
-#endif
+                BUBBLE1(send_data_msg(tray, icon, "space closed", timeout, msgid++));
+                NOTIFY1(notify_notification_show(notify_closed, NULL));
             }
+            else
+                goto close;
         }
         else
         {
@@ -529,27 +678,35 @@ int main(int argc, char *argv[])
                 status = LOST;
                 img_current = img_pending;
             }
+            else
+                goto close;
         }
         
-        XPutImage(disp, icon, DefaultGC(disp, 0), img_current,
+        XPutImage(disp, icon, DefaultGC(disp, screen), img_current,
             0, 0, 0, 0, img_current->width, img_current->height);
         XFlush(disp);
         
+        ptr = strstr(json, "\"lastchange\":");
+        if(ptr && (ptr = strtok(ptr, ",")))
+        {
+            ptr += strlen("\"lastchange\": ");
+            tstuff.timestamp = atoi(ptr);
+        }
+        else
+            tstuff.timestamp = 0;
+close:
         close(sock);
         sleeptime = refresh;
 sleep:
-        switch((ret = event_loop(icon, img_current, &pfds, sleeptime)))
+        tstuff.status = status;
+        switch((ret = event_loop(root, tray, icon, tooltip, img_current, &tstuff, &pfds, sleeptime)))
         {
         case -1:
             XDestroyWindow(disp, icon);
             icon = create_icon(root, argv[0]);
-#ifdef BUBBLE
             tray = dock_tray(screen, icon, root);
-#else
-            dock_tray(screen, icon, root);
-#endif
             sleep(1);
-            XPutImage(disp, icon, DefaultGC(disp, 0), img_pending,
+            XPutImage(disp, icon, DefaultGC(disp, screen), img_pending,
                 0, 0, 0, 0, img_pending->width, img_pending->height);
             XFlush(disp);
             status = PENDING;
