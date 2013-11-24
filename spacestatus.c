@@ -87,7 +87,6 @@ struct tooltip_stuff
     unsigned long fg_color, bg_color;
     int y, font_set, status;
     Font font;
-    time_t timestamp;
 };
 
 int sock;
@@ -191,42 +190,72 @@ Window create_tooltip(Window root, int screen, struct tooltip_stuff *stuff)
     return tooltip;
 }
 
+int tooltip_info(char text[][100], int *pos, int *count)
+{
+    int max = 0, ret, sec;
+    struct json *jp;
+    
+    if((jp = json_get("{space:s", &j)))
+    {
+        ret = sprintf(text[0], "Space: %s", jp->string);
+        if(ret>max)
+        {
+            max = ret;
+            *pos = *count;
+        }
+        (*count)++;
+    }
+    if((jp = json_get("{open:b", &j)))
+    {
+        ret = sprintf(text[*count], "Status: %s", jp->bool == true ? "open" : "closed");
+        if((jp = json_get("{lastchange:i", &j)))
+        {
+            sec = difftime(time(0), jp->number.l);
+            ret = sprintf(text[*count], "Status: %s for %02i:%02i:%02i", jp->bool == true ? "open" : "closed",
+                sec/3600, (sec/60)%60, sec%60);
+        }
+        if(ret>max)
+        {
+            max = ret;
+            *pos = *count;
+        }
+        (*count)++;
+    }
+    return max;
+}
+
 void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff *stuff)
 {
-    int sec, len, dir, ascent, descent, x;
-    char buf[100];
+    int dir, ascent, descent, x, text_max, text_count = 0, text_pos = 0;
+    char text[2][100];
     XCharStruct xchar;
     XWindowAttributes attr_root, attr_tray;
     
-    if(!stuff->timestamp)
-        stuff->status = LOST;
     switch(stuff->status)
     {
     case PENDING:
-        strcpy(buf, "pending...");
+        strcpy(text[0], "pending...");
+        text_max = strlen(text[0]);
+        text_count++;
         break;
     case OPEN:
-        sec = difftime(time(0), stuff->timestamp);
-        sprintf(buf, "open for %02i:%02i:%02i", sec/3600, (sec/60)%60, sec%60);
-        break;
     case CLOSED:
-        sec = difftime(time(0), stuff->timestamp);
-        sprintf(buf, "closed for %02i:%02i:%02i", sec/3600, (sec/60)%60, sec%60);
-        break;
+        text_max = tooltip_info(text, &text_pos, &text_count);
+        if(text_count)
+            break;
     case LOST:
-        strcpy(buf, "api parsing failed...");
+        strcpy(text[0], "api parsing failed...");
+        text_max = strlen(text[0]);
+        text_count++;
         break;
     }
-    len = strlen(buf);
     
     XGetWindowAttributes(disp, root, &attr_root);
     XGetWindowAttributes(disp, tray, &attr_tray);
     
-    XQueryTextExtents(disp, XGContextFromGC(gc), buf, len,
+    XQueryTextExtents(disp, XGContextFromGC(gc), text[text_pos], text_max,
         &dir, &ascent, &descent, &xchar);
     
-    ascent += BORDER;
-    descent += BORDER;
     xchar.width += BORDER*4;
     x = attr_tray.x+attr_tray.width/2-xchar.width/2;
     if(x < 0)
@@ -234,10 +263,12 @@ void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff
     if(x+xchar.width > attr_root.width)
         x = attr_root.width-xchar.width;
     
-    XMoveResizeWindow(disp, tooltip, x, stuff->y, xchar.width, ascent+descent);
+    XMoveResizeWindow(disp, tooltip, x, stuff->y, xchar.width,
+        (ascent+descent)*text_count+BORDER*2);
     XRaiseWindow(disp, tooltip);
     XMapWindow(disp, tooltip);
-    XDrawImageString(disp, tooltip, gc, BORDER*2, ascent, buf, len);
+    for(x=0; x<text_count; x++)
+        XDrawImageString(disp, tooltip, gc, BORDER*2, BORDER+ascent+x*(ascent+descent), text[x], strlen(text[x]));
 }
 
 Window dock_tray(int screen, Window icon, Window root)
@@ -696,10 +727,6 @@ malformed:  if(status != LOST)
             0, 0, 0, 0, img_current->width, img_current->height);
         XFlush(disp);
         
-        if((jp = json_get("{lastchange:i", &j)))
-            tstuff.timestamp = jp->number.l;
-        else
-            tstuff.timestamp = 0;
 close:
         close(sock);
         sleeptime = refresh;
