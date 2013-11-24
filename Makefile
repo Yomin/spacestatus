@@ -10,5 +10,8 @@ notify: $(NAME)
 bubble: FLAGS = -D BUBBLE
 bubble: $(NAME)
 
-$(NAME): $(NAME).c
-	gcc -Wall -ggdb $(NAME).c -o $(NAME) -lX11 -lXpm $(CFLAGS) $(FLAGS)
+$(NAME): $(NAME).c json.c
+	gcc -Wall -ggdb $(NAME).c json.c -o $(NAME) -lX11 -lXpm $(CFLAGS) $(FLAGS)
+
+json: json.c
+	gcc -Wall -ggdb json.c -o json -D TEST

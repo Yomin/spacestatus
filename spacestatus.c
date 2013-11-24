@@ -37,6 +37,8 @@
 #include <X11/Xlib.h>
 #include <X11/xpm.h>
 
+#include "json.h"
+
 #ifdef NOTIFY
 #   include <libnotify/notify.h>
 #endif
@@ -94,6 +96,7 @@ char *req;
 Display *disp;
 XImage *img_open, *img_closed, *img_pending, *img_current;
 GC gc;
+struct json j;
 
 void send_ctrl_msg(Window tray, Window win, long msg, long data1, long data2, long data3)
 {
@@ -211,7 +214,7 @@ void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff
         sprintf(buf, "closed for %02i:%02i:%02i", sec/3600, (sec/60)%60, sec%60);
         break;
     case LOST:
-        strcpy(buf, "my json parsing seems terrible :(");
+        strcpy(buf, "api parsing failed...");
         break;
     }
     len = strlen(buf);
@@ -365,6 +368,7 @@ void cleanup(int signal)
     close(sock);
     free(req);
     NOTIFY1(notify_uninit());
+    json_free(&j);
     XDestroyImage(img_closed);
     XDestroyImage(img_open);
     XDestroyImage(img_pending);
@@ -491,9 +495,10 @@ int main(int argc, char *argv[])
     NOTIFY1(NotifyNotification *notify_open, *notify_closed);
     
     // tmp
-    int ret, json_size;
-    char buf[100], *ptr, *json;
+    int ret, data_size;
+    char buf[100], *ptr, *data;
     char **fonts;
+    struct json *jp;
     
     if(!(disp = XOpenDisplay(NULL)))
     {
@@ -611,8 +616,9 @@ int main(int argc, char *argv[])
     XFlush(disp);
     img_current = img_pending;
     
-    json_size = 100;
-    req = malloc(json_size);
+    data_size = 100;
+    req = malloc(data_size);
+    json_init(&j);
     
     struct pollfd pfds;
     pfds.fd = ConnectionNumber(disp);
@@ -635,70 +641,68 @@ int main(int argc, char *argv[])
         {
             status = PENDING;
             img_current = img_pending;
-            goto sleep;
         }
-        if(!(json = request(sock, dest, path, &req, &json_size)))
+        else if(!(data = request(sock, dest, path, &req, &data_size)))
         {
             status = PENDING;
             img_current = img_pending;
             close(sock);
-            goto sleep;
         }
-        
-        if(strstr(json, "\"open\":true"))
+        else if(json_parse(data, &j))
         {
-            if(status != OPEN)
-            {
-                status = OPEN;
-                printf("open\n");
-                img_current = img_open;
-                BUBBLE1(send_data_msg(tray, icon, "space open", timeout, msgid++));
-                NOTIFY1(notify_notification_show(notify_open, NULL));
-            }
-            else
-                goto close;
-        }
-        else if(strstr(json, "\"open\":false"))
-        {
-            if(status != CLOSED)
-            {
-                status = CLOSED;
-                printf("closed\n");
-                img_current = img_closed;
-                BUBBLE1(send_data_msg(tray, icon, "space closed", timeout, msgid++));
-                NOTIFY1(notify_notification_show(notify_closed, NULL));
-            }
-            else
-                goto close;
-        }
-        else
-        {
-            printf("JSON malformed\n");
-            if(status != LOST)
+malformed:  if(status != LOST)
             {
                 status = LOST;
+                printf("JSON malformed\n");
                 img_current = img_pending;
             }
             else
                 goto close;
         }
+        else if((jp = json_get("{open:b", &j)))
+        {
+            switch(jp->bool)
+            {
+            case true:
+                if(status != OPEN)
+                {
+                    status = OPEN;
+                    printf("open\n");
+                    img_current = img_open;
+                    BUBBLE1(send_data_msg(tray, icon, "space open", timeout, msgid++));
+                    NOTIFY1(notify_notification_show(notify_open, NULL));
+                }
+                else
+                    goto close;
+                break;
+            case false:
+                if(status != CLOSED)
+                {
+                    status = CLOSED;
+                    printf("closed\n");
+                    img_current = img_closed;
+                    BUBBLE1(send_data_msg(tray, icon, "space closed", timeout, msgid++));
+                    NOTIFY1(notify_notification_show(notify_closed, NULL));
+                }
+                else
+                    goto close;
+                break;
+            }
+        }
+        else
+            goto malformed;
         
         XPutImage(disp, icon, DefaultGC(disp, screen), img_current,
             0, 0, 0, 0, img_current->width, img_current->height);
         XFlush(disp);
         
-        ptr = strstr(json, "\"lastchange\":");
-        if(ptr && (ptr = strtok(ptr, ",")))
-        {
-            ptr += strlen("\"lastchange\": ");
-            tstuff.timestamp = atoi(ptr);
-        }
+        if((jp = json_get("{lastchange:i", &j)))
+            tstuff.timestamp = jp->number.l;
         else
             tstuff.timestamp = 0;
 close:
         close(sock);
         sleeptime = refresh;
-sleep:
         tstuff.status = status;
         switch((ret = event_loop(root, tray, icon, tooltip, img_current, &tstuff, &pfds, sleeptime)))
         {
