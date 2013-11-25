@@ -185,7 +185,7 @@ Window create_tooltip(Window root, int screen, struct tooltip_stuff *stuff)
     else
         gc = XCreateGC(disp, tooltip, GCForeground|GCBackground, &gcval);
     
-    XSelectInput(disp, tooltip, ExposureMask);
+    XSelectInput(disp, tooltip, ExposureMask|VisibilityChangeMask);
     
     return tooltip;
 }
@@ -460,6 +460,15 @@ int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *im
                         break;
                     case DestroyNotify: // tray
                         return -1;
+                    case VisibilityNotify: // tooltip
+                        switch(((XVisibilityEvent*)&e)->state)
+                        {
+                        case VisibilityPartiallyObscured:
+                        case VisibilityFullyObscured:
+                            show_tooltip(root, tray, tooltip, tstuff);
+                            break;
+                        }
+                        break;
                     }
                 }
             }
