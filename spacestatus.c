@@ -85,7 +85,7 @@
 struct tooltip_stuff
 {
     unsigned long fg_color, bg_color;
-    int y, font_set, status;
+    int y, font_set, status, visible;
     Font font;
 };
 
@@ -453,9 +453,11 @@ int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *im
                             show_tooltip(root, tray, tooltip, tstuff);
                         break;
                     case EnterNotify: // icon
+                        tstuff->visible = 1;
                         show_tooltip(root, tray, tooltip, tstuff);
                         break;
                     case LeaveNotify: // icon
+                        tstuff->visible = 0;
                         XUnmapWindow(disp, tooltip);
                         break;
                     case DestroyNotify: // tray
@@ -465,7 +467,8 @@ int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *im
                         {
                         case VisibilityPartiallyObscured:
                         case VisibilityFullyObscured:
-                            show_tooltip(root, tray, tooltip, tstuff);
+                            if(tstuff->visible)
+                                show_tooltip(root, tray, tooltip, tstuff);
                             break;
                         }
                         break;
@@ -552,6 +555,7 @@ int main(int argc, char *argv[])
     tstuff.bg_color = BlackPixel(disp, 0);
     tstuff.y = 65;
     tstuff.font_set = 0;
+    tstuff.visible = 0;
     
     while((opt = getopt(argc, argv, OPTSTR)) != -1)
     {
