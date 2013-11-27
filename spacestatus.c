@@ -194,6 +194,7 @@ int tooltip_info(char text[][100], int *pos, int *count)
 {
     int max = 0, ret, sec;
     struct json *jp;
+    char *status;
     
     if((jp = json_get("{space:s", &j)))
     {
@@ -207,12 +208,12 @@ int tooltip_info(char text[][100], int *pos, int *count)
     }
     if((jp = json_get("{open:b", &j)))
     {
-        ret = sprintf(text[*count], "Status: %s", jp->bool == true ? "open" : "closed");
+        status = jp->bool == true ? "open" : "closed";
+        ret = sprintf(text[*count], "Status: %s", status);
         if((jp = json_get("{lastchange:i", &j)))
         {
             sec = difftime(time(0), jp->number.l);
-            ret = sprintf(text[*count], "Status: %s for %02i:%02i:%02i", jp->bool == true ? "open" : "closed",
-                sec/3600, (sec/60)%60, sec%60);
+            ret = sprintf(text[*count], "Status: %s for %02i:%02i:%02i", status, sec/3600, (sec/60)%60, sec%60);
         }
         if(ret>max)
         {
