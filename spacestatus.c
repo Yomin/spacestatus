@@ -1,5 +1,5 @@
 /*
- * Copyright (c) 2013 Martin Rödel aka Yomin
+ * Copyright (c) 2013, 2014 Martin Rödel aka Yomin
  *
  * Permission is hereby granted, free of charge, to any person obtaining a copy
  * of this software and associated documentation files (the "Software"), to deal
@@ -227,7 +227,7 @@ int tooltip_info(char text[][100], int *pos, int *count)
 
 void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff *stuff)
 {
-    int dir, ascent, descent, x, text_max, text_count = 0, text_pos = 0;
+    int dir, ascent, descent, x, y, text_max, text_count = 0, text_pos = 0, height;
     char text[2][100];
     XCharStruct xchar;
     XWindowAttributes attr_root, attr_tray;
@@ -259,13 +259,17 @@ void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff
     
     xchar.width += BORDER*4;
     x = attr_tray.x+attr_tray.width/2-xchar.width/2;
+    height = (ascent+descent)*text_count+BORDER*2;
     if(x < 0)
         x = 0;
     if(x+xchar.width > attr_root.width)
         x = attr_root.width-xchar.width;
+    if(attr_tray.y < attr_root.height/2)
+        y = stuff->y;
+    else
+        y = attr_root.height - stuff->y - height;
     
-    XMoveResizeWindow(disp, tooltip, x, stuff->y, xchar.width,
-        (ascent+descent)*text_count+BORDER*2);
+    XMoveResizeWindow(disp, tooltip, x, y, xchar.width, height);
     XRaiseWindow(disp, tooltip);
     XMapWindow(disp, tooltip);
     for(x=0; x<text_count; x++)
