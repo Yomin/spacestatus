@@ -1,0 +1,110 @@
+.ds SP \\fB%PACKAGE_NAME%\\fP
+.
+.
+.TH "%PACKAGE%" 1 \
+    "%DATE%" \
+    "%PACKAGE_NAME% Version %PACKAGE_VERSION%"
+.
+.
+.SH NAME
+%PACKAGE% \- simple space status tray icon
+.
+.
+.SH SYNOPSIS
+.
+.SY %PACKAGE%
+.OP \-r n
+.OP \-p port
+.OP \-t n
+.OP \-y n
+.OP \-c color
+.OP \-b color
+.OP \-f font
+.RI [ destination ]
+.IR
+.YS
+.
+.
+.SH DESCRIPTION
+.
+\*(SP is a simple program for displaying the current
+status of a space API.
+.
+.
+.SH OPTIONS
+.
+.IP "\fB-r\fR \fIn"
+Query the space API every
+.I n
+minutes ( default
+.I 5
+minutes).
+.IP "\fB-p\fR \fIport"
+Query the space API on this port ( default
+.I 80
+).
+.IP "\fB-t\fR \fIn"
+Display the notification and/or bubble
+.I n
+seconds ( default
+.I 3
+seconds).
+.IP "\fB-y\fR \fIn"
+Display the tooltip
+.I n
+pixel below/above the tray icon (Position depends on
+the position of your traybar) ( default
+.I 65
+pixel).
+.IP "\fB-c\fR \fIcolor"
+Set the tooltip foreground color to
+.I color
+(given in rgb hex format) ( default
+.I ffffff
+).
+.IP "\fB-b\fR \fIcolor"
+Set the tooltip background color to
+.I color
+(given in rgb hex format) ( default
+.I 000000
+).
+.IP "\fB-f\fR \fIfont"
+Set the tooltip font to
+.I font.
+.
+.
+.SH EXIT STATUS
+.
+\*(SP will return a non-null exit code if an error occurred.
+.
+.
+.SH FILES
+.
+.TP
+.B %pkgdatadir%/{open,closed,pending}.xpm
+Icons used for different tray states.
+.
+.
+.SH BUGS
+.
+\*(SP does not have any such thing called \(lqbug\(rq.
+Any conceived misbehaviour must be totally your fault.
+\" you rock Robin! :)
+.
+.
+.SH SEE ALSO
+.
+.TP
+Homepage:
+.UR %PACKAGE_URL%
+\*(SP
+.UE
+.
+.
+.SH AUTHOR
+.
+This manpage and the \*(SP program was written by
+.MT lordyomin@hivegate.net
+Martin Rödel aka Yomin
+.ME .
+\# EOF

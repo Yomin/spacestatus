@@ -28,6 +28,14 @@ AC_ARG_WITH(xembed,
 
 # Checks for programs.
 AC_PROG_CC
+AC_CHECK_PROG([DATE], [date], [date])
+if [ "x$DATE" != "xdate" ]; then
+    AC_MSG_ERROR([date not found])
+fi
+AC_CHECK_PROG([SED], [sed], [sed])
+if [ "x$SED" != "xsed" ]; then
+    AC_MSG_ERROR([sed not found])
+fi
 
 # Checks for libraries.
 AC_CHECK_LIB([X11], [XOpenDisplay])
@@ -47,5 +55,5 @@ AC_FUNC_MALLOC
 AC_FUNC_REALLOC
 AC_CHECK_FUNCS([gettimeofday memset socket strchr strrchr strspn strstr])
 
-AC_CONFIG_FILES([Makefile src/Makefile])
+AC_CONFIG_FILES([Makefile src/Makefile doc/Makefile])
 AC_OUTPUT
