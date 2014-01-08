@@ -37,11 +37,15 @@
 #include <X11/Xlib.h>
 #include <X11/xpm.h>
 
-#include "json.h"
+#ifdef HAVE_CONFIG_H
+#   include "config.h"
+#endif
 
 #ifdef NOTIFY
 #   include <libnotify/notify.h>
 #endif
+
+#include "json.h"
 
 #define SYSTEM_TRAY_REQUEST_DOCK    0
 #define SYSTEM_TRAY_BEGIN_MESSAGE   1
@@ -54,15 +58,17 @@
 
 #define BORDER 3 // tooltip
 
+#define OPTSTR_ALL "r:p:y:c:b:f:"
+#define USAGE_ALL "Usage:\t%1$s [-r <min>] [-p <port>]" \
+    "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>]"
+#define USAGE_PARAM "<dest>"
 #if defined NOTIFY || defined BUBBLE
-#   define OPTSTR "r:p:y:c:b:f:t:"
-#   define USAGE "Usage: %s [-r <min>] [-p <port>] [-t <sec>]\n" \
-                 "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>] <dest>\n"
+#   define OPTSTR OPTSTR_ALL "t:"
+#   define USAGE USAGE_ALL "[-t <sec>] " USAGE_PARAM "\n"
 #   define NOTIFYBUBBLE1(...) __VA_ARGS__
 #else
-#   define OPTSTR "r:p:y:c:b:f:"
-#   define USAGE "Usage: %s [-r <min>] [-p <port>]\n" \
-                 "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>] <dest>\n"
+#   define OPTSTR OPTSTR_ALL
+#   define USAGE USAGE_ALL " " USAGE_PARAM "\n"
 #   define NOTIFYBUBBLE1(...)
 #endif
 
@@ -153,10 +159,10 @@ Window create_icon(Window root, char *argv0)
     icon = XCreateSimpleWindow(disp, root, 0, 0, 1, 1, 0, 0, 0);
     hint = XAllocClassHint();
     hint->res_name = basename(argv0);
-    hint->res_class = "spacestatus";
+    hint->res_class = PACKAGE;
     XSetClassHint(disp, icon, hint);
     XFree(hint);
-    XStoreName(disp, icon, "spacestatus");
+    XStoreName(disp, icon, PACKAGE);
     
     XSelectInput(disp, icon, ExposureMask|EnterWindowMask|LeaveWindowMask);
     
@@ -639,19 +645,19 @@ int main(int argc, char *argv[])
     memset(buf, 0, 100);
     readlink("/proc/self/exe", buf, 100);
     ptr = strrchr(buf, '/');
-    strcpy(ptr+1, "closed.xpm");
+    strcpy(ptr+1, "../share/closed.xpm");
     if(XpmReadFileToImage(disp, buf, &img_closed, NULL, NULL))
     {
         printf("Failed to load closed.xpm\n");
         return 3;
     }
-    strcpy(ptr+1, "open.xpm");
+    strcpy(ptr+1, "../share/open.xpm");
     if(XpmReadFileToImage(disp, buf, &img_open, NULL, NULL))
     {
         printf("Failed to load open.xpm\n");
         return 4;
     }
-    strcpy(ptr+1, "pending.xpm");
+    strcpy(ptr+1, "../share/pending.xpm");
     if(XpmReadFileToImage(disp, buf, &img_pending, NULL, NULL))
     {
         printf("Failed to load pending.xpm\n");
@@ -676,7 +682,7 @@ int main(int argc, char *argv[])
     signal(SIGINT, cleanup);
     
 #ifdef NOTIFY
-    notify_init("spacestatus");
+    notify_init(PACKAGE);
     notify_open = notify_notification_new("space open", 0, "dialog-information");
     notify_closed = notify_notification_new("space closed", 0, "dialog-information");
     notify_notification_set_timeout(notify_open, timeout);
