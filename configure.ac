@@ -1,6 +1,8 @@
 
-AC_INIT([spacestatus], m4_esyscmd_s(echo 1.$(git rev-list HEAD --count)))
-AM_INIT_AUTOMAKE([-Wall -Werror foreign])
+AC_PREREQ([2.65])
+AC_INIT([spacestatus], m4_esyscmd_s(echo 1.$(git rev-list HEAD --count)),
+    [lordyomin@hivegate.net], [spacestatus], [http://github.com/Yomin/spacestatus])
+AM_INIT_AUTOMAKE([-Wall foreign])
 AC_CONFIG_SRCDIR([src/spacestatus.c])
 AC_CONFIG_HEADERS([config.h])
 
