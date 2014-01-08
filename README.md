@@ -2,16 +2,21 @@
 
 Simple space status trayicon.
 
+## compile
+
+Use autogen.sh to generate Makefile. It'll ask you for optional features
+like notification or bubbles.
+
 ## usage
 
-Place three xpm files named open.xpm, closed.xpm and pending.xpm next to the executable.
 Invoke with the URL to your space API eg.
 
 spacestatus spaceapi.space.net
 
-## notifications/bubbles
+## ico
 
-Compile with 'make notify' or 'make bubble' to activate respective function.
+The icons are accessed at $(bin)/../share/{open,closed,pending}.xpm.
+Replace/modify to change look.
 
 ## options
 
