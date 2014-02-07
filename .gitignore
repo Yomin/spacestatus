@@ -15,3 +15,4 @@ stamp-h?
 src/spacestatus
 src/json
 *.o
+*.1
