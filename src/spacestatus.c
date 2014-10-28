@@ -374,10 +374,10 @@ char* request(int sock, char *host, char *path, char **dst, int *size)
     
     while(!len || count < len)
     {
-        ret = recv(sock, *dst+count, *size-count, 0);
-        if(ret == -1)
+        if((ret = recv(sock, *dst+count, *size-count, 0)) <= 0)
         {
-            perror("Failed to recv");
+            if(ret == -1)
+                perror("Failed to recv");
             return 0;
         }
         count += ret;
@@ -385,10 +385,10 @@ char* request(int sock, char *host, char *path, char **dst, int *size)
         {
             *size *= 2;
             *dst = realloc(*dst, *size);
-            ret = recv(sock, *dst+count, *size-count, 0);
-            if(ret == -1)
+            if((ret = recv(sock, *dst+count, *size-count, 0)) <= 0)
             {
-                perror("Failed to recv");
+                if(ret == -1)
+                    perror("Failed to recv");
                 return 0;
             }
             count += ret;
