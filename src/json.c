@@ -291,6 +291,9 @@ void json_free(struct json *j)
 {
     int i;
     
+    if(!j)
+        return;
+    
     switch(j->type)
     {
     case json_type_string:
@@ -332,9 +335,17 @@ void json_free(struct json *j)
 
 int json_parse(char *str, struct json *j)
 {
-    int ret = json_value(&str, j);
-    if(ret)
+    int ret;
+    
+    if(!j)
+        return -1;
+    
+    if(j->type != json_type_unset)
         json_free(j);
+    
+    if((ret = json_value(&str, j)))
+        json_free(j);
+    
     return ret;
 }
 
@@ -354,18 +365,30 @@ struct json* json_getter(char *target, struct json *j)
         target++;
         if(j->type != json_type_object)
             return 0;
+        if(!*target)
+            return j;
         ptr = json_eat(target, "^:");
-        if(target == ptr)
+        if(target == ptr || !*ptr)
             return 0;
         json_patch(ptr);
         for(i=0; i<j->object.len; i++)
             if(!strcmp(j->object.name[i], target))
-                return json_get(ptr+1, j->object.value[i]);
+                return json_getter(ptr+1, j->object.value[i]);
         return 0;
     case '[': // array
-        if(j->type == json_type_array)
+        target++;
+        if(j->type != json_type_array)
+            return 0;
+        if(!*target)
             return j;
-        return 0;
+        ptr = json_eat(target, "1234567890");
+        if(target == ptr || *ptr != ':')
+            return 0;
+        json_patch(ptr);
+        i = atoi(target);
+        if(i >= j->array.len)
+            return 0;
+        return json_getter(ptr+1, j->array.value[i]);
     case 'b': // bool
         if(j->type == json_type_bool)
             return j;
@@ -458,13 +481,26 @@ void json_print(struct json *j)
 
 int main(int argc, char *argv[])
 {
-    struct json j;
+    struct json j, *jp;
+    
     if(json_parse(argv[1], &j))
+    {
+        printf("parsing failed\n");
         return -1;
+    }
+    
     json_print(&j);
     printf("\n");
-    if(!json_get(argv[2], &j))
+    
+    if(!(jp = json_get(argv[2], &j)))
+    {
+        printf("getting failed\n");
         return -1;
+    }
+    
+    json_print(jp);
+    printf("\n");
+    
     json_free(&j);
     return 0;
 }
