@@ -20,6 +20,8 @@
  * THE SOFTWARE.
  */
 
+#define _GNU_SOURCE
+
 #include <stdio.h>
 #include <stdlib.h>
 #include <stdarg.h>
@@ -60,7 +62,7 @@
 #define BORDER 3 // tooltip
 
 #define OPTSTR_ALL "v::r:p:y:c:b:f:"
-#define USAGE_ALL "Usage:\t%1$s [-v] [-r <min>] [-p <port>]" \
+#define USAGE_ALL "Usage:\t%s [-v] [-r <min>] [-p <port>]" \
     "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>]"
 #define USAGE_PARAM "<dest>"
 #if defined NOTIFY || defined BUBBLE
@@ -550,7 +552,7 @@ int parse_api_state(struct json *jstate)
     
     if((jp = json_get("{open:b", jstate)))
     {
-        switch(jp->bool)
+        switch(jp->v.bool)
         {
         case true:
             return OPEN;
@@ -576,12 +578,12 @@ int parse_api()
     if(!(jp = json_get("{api:s", &json)))
         return pverbose(LOST, "json: 'api' not found/malformed\n");
     
-    pverbose(0, "api version: %s\n", jp->string);
+    pverbose(0, "api version: %s\n", jp->v.string);
     
-    if(jp->string[0] == '-')
-        jp->string++;
+    if(jp->v.string[0] == '-')
+        jp->v.string++;
     
-    if((ptr = strchr(jp->string, '.')))
+    if((ptr = strchr(jp->v.string, '.')))
     {
         *ptr = 0;
         if(strspn(ptr+1, "1234567890") != strlen(ptr+1))
@@ -589,9 +591,9 @@ int parse_api()
         version = atoi(ptr+1);
     }
     
-    if(strspn(jp->string, "1234567890") != strlen(jp->string))
+    if(strspn(jp->v.string, "1234567890") != strlen(jp->v.string))
         return pverbose(LOST, "json: 'api' malformed\n");
-    version += atoi(jp->string)*100;
+    version += atoi(jp->v.string)*100;
     
     if(version > 13)
     {
@@ -615,12 +617,12 @@ int parse_api()
     tstuff.status = status;
     
     if((jp = json_get("{space:s", &json)))
-        tstuff.space = jp->string;
+        tstuff.space = jp->v.string;
     else
         pverbose(0, "json: 'space' not found/malformed\n");
     
     if((jp = json_get("{lastchange:i", state)))
-        tstuff.lastchange = jp->number.l;
+        tstuff.lastchange = jp->v.number.l;
     else
         pverbose(0, "json: 'lastchange' not found/malformed\n");
     

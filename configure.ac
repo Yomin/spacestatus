@@ -38,6 +38,9 @@ AS_IF([test "x$DATE" != "xdate"], [AC_MSG_ERROR([date not found])])
 AC_CHECK_PROG([SED], [sed], [sed])
 AS_IF([test "x$SED" != "xsed"], [AC_MSG_ERROR([sed not found])])
 
+# Set compiler options.
+AC_SUBST([CFLAGS], ["-Wall -Wpedantic -std=gnu99 -g -O2"])
+
 # Checks for libraries.
 AC_CHECK_LIB([X11], [XOpenDisplay])
 AC_CHECK_LIB([Xpm], [XpmReadFileToImage])

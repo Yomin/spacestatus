@@ -15,7 +15,7 @@ struct json
         json_type_null,
         json_type_string
     } type;
-    union
+    union json_value
     {
         struct json_object
         {
@@ -43,7 +43,7 @@ struct json
             true = 1
         } bool;
         char *string;
-    };
+    } v;
 };
 
 void json_init(struct json *j);

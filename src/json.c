@@ -112,13 +112,13 @@ int json_number(char **str, struct json *j)
         }
         else
             json_patch(ptr1);
-        j->number.d = atof(*str);
+        j->v.number.d = atof(*str);
         j->type = json_type_float;
     }
     else
     {
         json_patch(ptr2);
-        j->number.l = atol(*str);
+        j->v.number.l = atol(*str);
         j->type = json_type_int;
     }
     
@@ -138,9 +138,9 @@ int json_string(char **str, struct json *j)
         return -1;
     json_patch(ptr);
     
-    j->string = malloc(ptr-*str+1);
-    strcpy(j->string, *str);
-    j->string[ptr-*str] = 0;
+    j->v.string = malloc(ptr-*str+1);
+    strcpy(j->v.string, *str);
+    j->v.string[ptr-*str] = 0;
     j->type = json_type_string;
     
     *str = ptr+1;
@@ -182,14 +182,14 @@ int json_array(char **str, struct json *j)
     (*str)++;
     
     j->type = json_type_array;
-    j->array.len = 0;
+    j->v.array.len = 0;
     
     while(1)
     {
         json_eat_filler(str);
         *str = json_eat(*str, " \t");
-        json_malloc(&j->array.value, &j->array.len, 0);
-        if(json_value(str, j->array.value[j->array.len-1]))
+        json_malloc(&j->v.array.value, &j->v.array.len, 0);
+        if(json_value(str, j->v.array.value[j->v.array.len-1]))
             return -1;
         json_eat_filler(str);
         *str = json_eat(*str, " \t");
@@ -210,21 +210,21 @@ int json_object(char **str, struct json *j)
     (*str)++;
     
     j->type = json_type_object;
-    j->object.len = 0;
+    j->v.object.len = 0;
     
     while(1)
     {
         json_eat_filler(str);
-        json_malloc(&j->object.value, &j->object.len, &j->object.name);
-        if(json_string(str, j->object.value[j->object.len-1]))
+        json_malloc(&j->v.object.value, &j->v.object.len, &j->v.object.name);
+        if(json_string(str, j->v.object.value[j->v.object.len-1]))
             return -1;
-        j->object.name[j->object.len-1] = j->object.value[j->object.len-1]->string;
+        j->v.object.name[j->v.object.len-1] = j->v.object.value[j->v.object.len-1]->v.string;
         json_eat_filler(str);
         if(**str != ':')
             return -1;
         (*str)++;
         json_eat_filler(str);
-        if(json_value(str, j->object.value[j->object.len-1]))
+        if(json_value(str, j->v.object.value[j->v.object.len-1]))
             return -1;
         json_eat_filler(str);
         if(**str == '}')
@@ -242,12 +242,12 @@ int json_bool(char **str, struct json *j)
     j->type = json_type_bool;
     if(!strncmp(*str, "true", strlen("true")))
     {
-        j->bool = true;
+        j->v.bool = true;
         *str += strlen("true");
     }
     else if(!strncmp(*str, "false", strlen("false")))
     {
-        j->bool = false;
+        j->v.bool = false;
         *str += strlen("false");
     }
     else
@@ -297,31 +297,31 @@ void json_free(struct json *j)
     switch(j->type)
     {
     case json_type_string:
-        if(j->string)
-            free(j->string);
+        if(j->v.string)
+            free(j->v.string);
         break;
     case json_type_array:
-        for(i=0; i<j->array.len; i++)
-            if(j->array.value[i])
+        for(i=0; i<j->v.array.len; i++)
+            if(j->v.array.value[i])
             {
-                json_free(j->array.value[i]);
-                free(j->array.value[i]);
+                json_free(j->v.array.value[i]);
+                free(j->v.array.value[i]);
             }
-        free(j->array.value);
+        free(j->v.array.value);
         break;
     case json_type_object:
-        for(i=0; i<j->object.len; i++)
+        for(i=0; i<j->v.object.len; i++)
         {
-            if(j->object.name[i])
-                free(j->object.name[i]);
-            if(j->object.value[i])
+            if(j->v.object.name[i])
+                free(j->v.object.name[i]);
+            if(j->v.object.value[i])
             {
-                json_free(j->object.value[i]);
-                free(j->object.value[i]);
+                json_free(j->v.object.value[i]);
+                free(j->v.object.value[i]);
             }
         }
-        free(j->object.name);
-        free(j->object.value);
+        free(j->v.object.name);
+        free(j->v.object.value);
         break;
     case json_type_int:
     case json_type_float:
@@ -371,9 +371,9 @@ struct json* json_getter(char *target, struct json *j)
         if(target == ptr || !*ptr)
             return 0;
         json_patch(ptr);
-        for(i=0; i<j->object.len; i++)
-            if(!strcmp(j->object.name[i], target))
-                return json_getter(ptr+1, j->object.value[i]);
+        for(i=0; i<j->v.object.len; i++)
+            if(!strcmp(j->v.object.name[i], target))
+                return json_getter(ptr+1, j->v.object.value[i]);
         return 0;
     case '[': // array
         target++;
@@ -386,9 +386,9 @@ struct json* json_getter(char *target, struct json *j)
             return 0;
         json_patch(ptr);
         i = atoi(target);
-        if(i >= j->array.len)
+        if(i >= j->v.array.len)
             return 0;
-        return json_getter(ptr+1, j->array.value[i]);
+        return json_getter(ptr+1, j->v.array.value[i]);
     case 'b': // bool
         if(j->type == json_type_bool)
             return j;
@@ -437,36 +437,36 @@ void json_print(struct json *j)
         printf("unset");
         break;
     case json_type_string:
-        printf("\"%s\"", j->string);
+        printf("\"%s\"", j->v.string);
         break;
     case json_type_int:
-        printf("%li", j->number.l);
+        printf("%li", j->v.number.l);
         break;
     case json_type_float:
-        printf("%f", j->number.d);
+        printf("%f", j->v.number.d);
         break;
     case json_type_object:
-        printf("{\"%s\":", j->object.name[0]);
-        json_print(j->object.value[0]);
-        for(i=1; i<j->object.len; i++)
+        printf("{\"%s\":", j->v.object.name[0]);
+        json_print(j->v.object.value[0]);
+        for(i=1; i<j->v.object.len; i++)
         {
-            printf(", \"%s\":", j->object.name[i]);
-            json_print(j->object.value[i]);
+            printf(", \"%s\":", j->v.object.name[i]);
+            json_print(j->v.object.value[i]);
         }
         printf("}");
         break;
     case json_type_array:
         printf("[");
-        json_print(j->array.value[0]);
-        for(i=1; i<j->array.len; i++)
+        json_print(j->v.array.value[0]);
+        for(i=1; i<j->v.array.len; i++)
         {
             printf(",");
-            json_print(j->array.value[i]);
+            json_print(j->v.array.value[i]);
         }
         printf("]");
         break;
     case json_type_bool:
-        if(j->bool == true)
+        if(j->v.bool == true)
             printf("true");
         else
             printf("false");
