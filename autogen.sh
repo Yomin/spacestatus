@@ -16,4 +16,4 @@ option "XEmbed" 0 "xembed"
 
 autoreconf -vi || exit 1
 
-./configure $options $*
+./configure $options "$@"
