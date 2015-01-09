@@ -22,6 +22,7 @@
 
 #include <stdio.h>
 #include <stdlib.h>
+#include <stdarg.h>
 #include <string.h>
 #include <unistd.h>
 #include <errno.h>
@@ -58,8 +59,8 @@
 
 #define BORDER 3 // tooltip
 
-#define OPTSTR_ALL "r:p:y:c:b:f:"
-#define USAGE_ALL "Usage:\t%1$s [-r <min>] [-p <port>]" \
+#define OPTSTR_ALL "v::r:p:y:c:b:f:"
+#define USAGE_ALL "Usage:\t%1$s [-v] [-r <min>] [-p <port>]" \
     "[-y <pixel>] [-c <rgb>] [-b <rgb>] [-f <font>]"
 #define USAGE_PARAM "<dest>"
 #if defined NOTIFY || defined BUBBLE
@@ -91,17 +92,44 @@
 struct tooltip_stuff
 {
     unsigned long fg_color, bg_color;
-    int y, font_set, status, visible;
+    int y, font_set, visible;
     Font font;
+    
+    char *space;
+    int status, lastchange;
 };
 
-int sock;
+struct tiptext
+{
+    char *text;
+    int mallocd;
+};
+
+int sock, verbose;
 struct addrinfo *res;
 char *req;
 Display *disp;
 XImage *img_open, *img_closed, *img_pending, *img_current;
 GC gc;
-struct json j;
+struct json json;
+struct tooltip_stuff tstuff;
+
+int pverbose(int ret, const char *format, ...)
+{
+    if(!verbose)
+        return ret;
+    
+    va_list list;
+    va_start(list, format);
+    
+    if(ret)
+        vfprintf(stderr, format, list);
+    else
+        vprintf(format, list);
+    
+    va_end(list);
+    return ret;
+}
 
 void send_ctrl_msg(Window tray, Window win, long msg, long data1, long data2, long data3)
 {
@@ -169,23 +197,23 @@ Window create_icon(Window root, char *argv0)
     return icon;
 }
 
-Window create_tooltip(Window root, int screen, struct tooltip_stuff *stuff)
+Window create_tooltip(Window root, int screen)
 {
     Window tooltip;
     XSetWindowAttributes attr;
     XGCValues gcval;
     
     attr.override_redirect = 1;
-    attr.background_pixel = stuff->bg_color;
+    attr.background_pixel = tstuff.bg_color;
     
     tooltip = XCreateWindow(disp, root, 0, 0, 1, 1, 0, 0, InputOutput,
         CopyFromParent, CWOverrideRedirect|CWBackPixel, &attr);
     
-    gcval.foreground = stuff->fg_color;
-    gcval.background = stuff->bg_color;
-    if(stuff->font_set)
+    gcval.foreground = tstuff.fg_color;
+    gcval.background = tstuff.bg_color;
+    if(tstuff.font_set)
     {
-        gcval.font = stuff->font;
+        gcval.font = tstuff.font;
         gc = XCreateGC(disp, tooltip, GCForeground|GCBackground|GCFont, &gcval);
     }
     else
@@ -196,90 +224,77 @@ Window create_tooltip(Window root, int screen, struct tooltip_stuff *stuff)
     return tooltip;
 }
 
-int tooltip_info(char text[][100], int *pos, int *count)
+void draw_text(Window root, Window tray, Window tooltip, struct tiptext tips[], int n)
 {
-    int max = 0, ret, sec;
-    struct json *jp;
-    char *status;
-    
-    if((jp = json_get("{space:s", &j)))
-    {
-        ret = sprintf(text[0], "Space: %s", jp->string);
-        if(ret>max)
-        {
-            max = ret;
-            *pos = *count;
-        }
-        (*count)++;
-    }
-    if((jp = json_get("{open:b", &j)))
-    {
-        status = jp->bool == true ? "open" : "closed";
-        ret = sprintf(text[*count], "Status: %s", status);
-        if((jp = json_get("{lastchange:i", &j)))
-        {
-            sec = difftime(time(0), jp->number.l);
-            ret = sprintf(text[*count], "Status: %s for %02i:%02i:%02i", status, sec/3600, (sec/60)%60, sec%60);
-        }
-        if(ret>max)
-        {
-            max = ret;
-            *pos = *count;
-        }
-        (*count)++;
-    }
-    return max;
-}
-
-void show_tooltip(Window root, Window tray, Window tooltip, struct tooltip_stuff *stuff)
-{
-    int dir, ascent, descent, x, y, text_max, text_count = 0, text_pos = 0, height;
-    char text[2][100];
+    int dir, ascent, descent, x, y, height, width, max;
     XCharStruct xchar;
     XWindowAttributes attr_root, attr_tray;
     
-    switch(stuff->status)
-    {
-    case PENDING:
-        strcpy(text[0], "pending...");
-        text_max = strlen(text[0]);
-        text_count++;
-        break;
-    case OPEN:
-    case CLOSED:
-        text_max = tooltip_info(text, &text_pos, &text_count);
-        if(text_count)
-            break;
-    case LOST:
-        strcpy(text[0], "api parsing failed...");
-        text_max = strlen(text[0]);
-        text_count++;
-        break;
-    }
+    for(x=0,max=0; x<n; x++)
+        if((width = strlen(tips[x].text)) > max)
+            max = width;
     
     XGetWindowAttributes(disp, root, &attr_root);
     XGetWindowAttributes(disp, tray, &attr_tray);
     
-    XQueryTextExtents(disp, XGContextFromGC(gc), text[text_pos], text_max,
-        &dir, &ascent, &descent, &xchar);
+    XQueryTextExtents(disp, XGContextFromGC(gc), tips[0].text,
+        max, &dir, &ascent, &descent, &xchar);
     
     xchar.width += BORDER*4;
     x = attr_tray.x+attr_tray.width/2-xchar.width/2;
-    height = (ascent+descent)*text_count+BORDER*2;
+    height = (ascent+descent)*n+BORDER*2;
     if(x < 0)
         x = 0;
     if(x+xchar.width > attr_root.width)
         x = attr_root.width-xchar.width;
     if(attr_tray.y < attr_root.height/2)
-        y = stuff->y;
+        y = tstuff.y;
     else
-        y = attr_root.height - stuff->y - height;
+        y = attr_root.height - tstuff.y - height;
     
     XMoveResizeWindow(disp, tooltip, x, y, xchar.width, height);
     XRaiseWindow(disp, tooltip);
     XMapWindow(disp, tooltip);
-    for(x=0; x<text_count; x++)
-        XDrawImageString(disp, tooltip, gc, BORDER*2, BORDER+ascent+x*(ascent+descent), text[x], strlen(text[x]));
+    
+    for(x=0; x<n; x++)
+    {
+        XDrawImageString(disp, tooltip, gc, BORDER*2,
+            BORDER+ascent+x*(ascent+descent), tips[x].text,
+            strlen(tips[x].text));
+        if(tips[x].mallocd)
+            free(tips[x].text);
+    }
+}
+
+void show_tooltip(Window root, Window tray, Window tooltip)
+{
+    int sec;
+    struct tiptext tips[2];
+    
+    memset(tips, 0, 2*sizeof(struct tiptext));
+    
+    asprintf(&tips[0].text, "Space: %s", tstuff.space);
+    tips[0].mallocd = 1;
+    
+    switch(tstuff.status)
+    {
+    case PENDING:
+        tips[1].text = "pending...";
+        break;
+    case OPEN:
+    case CLOSED:
+        sec = difftime(time(0), tstuff.lastchange);
+        asprintf(&tips[1].text, "Status: %s for %02i:%02i:%02i",
+            tstuff.status==OPEN?"open":"closed",
+            sec/3600, (sec/60)%60, sec%60);
+        tips[1].mallocd = 1;
+        break;
+    case LOST:
+        tips[1].text = "api parsing failed...";
+        break;
+    }
+    
+    draw_text(root, tray, tooltip, tips, 2);
 }
 
 Window dock_tray(int screen, Window icon, Window root)
@@ -293,7 +308,7 @@ Window dock_tray(int screen, Window icon, Window root)
     while(tray == None)
     {
         XSelectInput(disp, root, StructureNotifyMask);
-        printf("Waiting for Systray\n");
+        pverbose(0, "Waiting for Systray\n");
         while(1)
         {
             XNextEvent(disp, &e);
@@ -302,7 +317,7 @@ Window dock_tray(int screen, Window icon, Window root)
         }
         tray = XGetSelectionOwner(disp, XInternAtom(disp, buf, False));
     }
-    printf("docked\n");
+    pverbose(0, "docked\n");
     
     XSelectInput(disp, tray, StructureNotifyMask);
     send_ctrl_msg(tray, tray, SYSTEM_TRAY_REQUEST_DOCK, icon, 0, 0);
@@ -332,7 +347,7 @@ int connect_api(int *sock, char *dest, char *port)
     
     if((ret = getaddrinfo(dest, port, &hints, &res)))
     {
-        printf("Failed to resolve destination: %s\n", gai_strerror(ret));
+        fprintf(stderr, "Failed to resolve destination: %s\n", gai_strerror(ret));
         close(*sock);
         return 7;
     }
@@ -410,7 +425,7 @@ void cleanup(int signal)
     close(sock);
     free(req);
     NOTIFY1(notify_uninit());
-    json_free(&j);
+    json_free(&json);
     XDestroyImage(img_closed);
     XDestroyImage(img_open);
     XDestroyImage(img_pending);
@@ -419,7 +434,7 @@ void cleanup(int signal)
     exit(0);
 }
 
-int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *img, struct tooltip_stuff *tstuff, struct pollfd *pfds, int sec)
+int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *img, struct pollfd *pfds, int sec)
 {
     XEvent e;
     struct timeval now, than;
@@ -461,14 +476,14 @@ int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *im
                             XFlush(disp);
                         }
                         else
-                            show_tooltip(root, tray, tooltip, tstuff);
+                            show_tooltip(root, tray, tooltip);
                         break;
                     case EnterNotify: // icon
-                        tstuff->visible = 1;
-                        show_tooltip(root, tray, tooltip, tstuff);
+                        tstuff.visible = 1;
+                        show_tooltip(root, tray, tooltip);
                         break;
                     case LeaveNotify: // icon
-                        tstuff->visible = 0;
+                        tstuff.visible = 0;
                         XUnmapWindow(disp, tooltip);
                         break;
                     case DestroyNotify: // tray
@@ -478,8 +493,8 @@ int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *im
                         {
                         case VisibilityPartiallyObscured:
                         case VisibilityFullyObscured:
-                            if(tstuff->visible)
-                                show_tooltip(root, tray, tooltip, tstuff);
+                            if(tstuff.visible)
+                                show_tooltip(root, tray, tooltip);
                             break;
                         }
                         break;
@@ -488,12 +503,12 @@ int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *im
             }
             else if(pfds[0].revents & POLLHUP)
             {
-                printf("POLLHUP on display\n");
+                fprintf(stderr, "POLLHUP on display\n");
                 return 10;
             }
             else if(pfds[0].revents & POLLERR)
             {
-                printf("POLLERR on display\n");
+                fprintf(stderr, "POLLERR on display\n");
                 return 11;
             }
         }
@@ -529,6 +544,89 @@ unsigned long parse_color(int screen, char *arg, char *name)
     return color.pixel;
 }
 
+int parse_api_state(struct json *jstate)
+{
+    struct json *jp;
+    
+    if((jp = json_get("{open:b", jstate)))
+    {
+        switch(jp->bool)
+        {
+        case true:
+            return OPEN;
+        case false:
+            return CLOSED;
+        }
+    }
+    return pverbose(LOST, "json: 'open' not found/malformed\n");
+}
+
+int parse_api()
+{
+    struct json *jp, *state;
+    char *ptr;
+    int version = 0, status;
+    
+    if(verbose > 1)
+    {
+        json_print(&json);
+        printf("\n");
+    }
+    
+    if(!(jp = json_get("{api:s", &json)))
+        return pverbose(LOST, "json: 'api' not found/malformed\n");
+    
+    pverbose(0, "api version: %s\n", jp->string);
+    
+    if(jp->string[0] == '-')
+        jp->string++;
+    
+    if((ptr = strchr(jp->string, '.')))
+    {
+        *ptr = 0;
+        if(strspn(ptr+1, "1234567890") != strlen(ptr+1))
+            return pverbose(LOST, "json: 'api' malformed\n");
+        version = atoi(ptr+1);
+    }
+    
+    if(strspn(jp->string, "1234567890") != strlen(jp->string))
+        return pverbose(LOST, "json: 'api' malformed\n");
+    version += atoi(jp->string)*100;
+    
+    if(version > 13)
+    {
+        pverbose(0, "warning: parsing unsupported api version\n");
+        version = 13;
+    }
+    
+    switch(version)
+    {
+    case 13:
+        if((state = json_get("{state:{", &json)))
+            break;
+        pverbose(LOST, "json: 'state' not found/malformed\n");
+    default:
+        state = &json;
+    }
+    
+    if((status = parse_api_state(state)) == LOST)
+        return status;
+    
+    tstuff.status = status;
+    
+    if((jp = json_get("{space:s", &json)))
+        tstuff.space = jp->string;
+    else
+        pverbose(0, "json: 'space' not found/malformed\n");
+    
+    if((jp = json_get("{lastchange:i", state)))
+        tstuff.lastchange = jp->number.l;
+    else
+        pverbose(0, "json: 'lastchange' not found/malformed\n");
+    
+    return status;
+}
+
 int main(int argc, char *argv[])
 {
     // xlib
@@ -541,7 +639,6 @@ int main(int argc, char *argv[])
     int opt;
     int refresh = 5*60;
     char *dest = 0, *port = "80", *path;
-    struct tooltip_stuff tstuff;
     NOTIFYBUBBLE1(int timeout = 3*1000);
     
     // else
@@ -552,16 +649,17 @@ int main(int argc, char *argv[])
     int ret, data_size;
     char buf[100], *ptr, *data;
     char **fonts;
-    struct json *jp;
     
     if(!(disp = XOpenDisplay(NULL)))
     {
-        printf("Failed to open display\n");
+        fprintf(stderr, "Failed to open display\n");
         return 2;
     }
     
+    verbose = 0;
     screen = DefaultScreen(disp);
     
+    memset(&tstuff, 0, sizeof(struct tooltip_stuff));
     tstuff.fg_color = WhitePixel(disp, 0);
     tstuff.bg_color = BlackPixel(disp, 0);
     tstuff.y = 65;
@@ -572,6 +670,9 @@ int main(int argc, char *argv[])
     {
         switch(opt)
         {
+        case 'v':
+            verbose = optarg ? strlen(optarg)+1 : 1;
+            break;
         case 'r':
             check_num_option(optarg, "refresh");
             refresh = atoi(optarg)*60;
@@ -594,7 +695,7 @@ int main(int argc, char *argv[])
             fonts = XListFonts(disp, optarg, 1, &ret);
             if(!fonts)
             {
-                printf("No matching font found\n");
+                fprintf(stderr, "No matching font found\n");
                 return 1;
             }
             XFreeFontNames(fonts);
@@ -629,7 +730,7 @@ int main(int argc, char *argv[])
     
     root = RootWindow(disp, screen);
     icon = create_icon(root, argv[0]);
-    tooltip = create_tooltip(root, screen, &tstuff);
+    tooltip = create_tooltip(root, screen);
     
 #ifdef XEMBED
     info[0] = 0;
@@ -648,19 +749,19 @@ int main(int argc, char *argv[])
     strcpy(ptr+1, "../share/closed.xpm");
     if(XpmReadFileToImage(disp, buf, &img_closed, NULL, NULL))
     {
-        printf("Failed to load closed.xpm\n");
+        fprintf(stderr, "Failed to load closed.xpm\n");
         return 3;
     }
     strcpy(ptr+1, "../share/open.xpm");
     if(XpmReadFileToImage(disp, buf, &img_open, NULL, NULL))
     {
-        printf("Failed to load open.xpm\n");
+        fprintf(stderr, "Failed to load open.xpm\n");
         return 4;
     }
     strcpy(ptr+1, "../share/pending.xpm");
     if(XpmReadFileToImage(disp, buf, &img_pending, NULL, NULL))
     {
-        printf("Failed to load pending.xpm\n");
+        fprintf(stderr, "Failed to load pending.xpm\n");
         return 5;
     }
     
@@ -673,7 +774,7 @@ int main(int argc, char *argv[])
     
     data_size = 100;
     req = malloc(data_size);
-    json_init(&j);
+    json_init(&json);
     
     struct pollfd pfds;
     pfds.fd = ConnectionNumber(disp);
@@ -703,49 +804,46 @@ int main(int argc, char *argv[])
             img_current = img_pending;
             close(sock);
         }
-        else if(json_parse(data, &j))
+        else if(json_parse(data, &json))
         {
 malformed:  if(status != LOST)
             {
                 status = LOST;
-                printf("JSON malformed\n");
+                fprintf(stderr, "json malformed\n");
                 img_current = img_pending;
             }
             else
                 goto close;
         }
-        else if((jp = json_get("{open:b", &j)))
+        else switch(parse_api())
         {
-            switch(jp->bool)
-            {
-            case true:
-                if(status != OPEN)
-                {
-                    status = OPEN;
-                    printf("open\n");
-                    img_current = img_open;
-                    BUBBLE1(send_data_msg(tray, icon, "space open", timeout, msgid++));
-                    NOTIFY1(notify_notification_show(notify_open, NULL));
-                }
-                else
-                    goto close;
-                break;
-            case false:
-                if(status != CLOSED)
-                {
-                    status = CLOSED;
-                    printf("closed\n");
-                    img_current = img_closed;
-                    BUBBLE1(send_data_msg(tray, icon, "space closed", timeout, msgid++));
-                    NOTIFY1(notify_notification_show(notify_closed, NULL));
-                }
-                else
-                    goto close;
-                break;
-            }
-        }
-        else
+        case LOST:
             goto malformed;
+        case OPEN:
+            if(status != OPEN)
+            {
+                status = OPEN;
+                pverbose(0, "open\n");
+                img_current = img_open;
+                BUBBLE1(send_data_msg(tray, icon, "space open", timeout, msgid++));
+                NOTIFY1(notify_notification_show(notify_open, NULL));
+            }
+            else
+                goto close;
+            break;
+        case CLOSED:
+            if(status != CLOSED)
+            {
+                status = CLOSED;
+                pverbose(0, "closed\n");
+                img_current = img_closed;
+                BUBBLE1(send_data_msg(tray, icon, "space closed", timeout, msgid++));
+                NOTIFY1(notify_notification_show(notify_closed, NULL));
+            }
+            else
+                goto close;
+            break;
+        }
         
         XPutImage(disp, icon, DefaultGC(disp, screen), img_current,
             0, 0, 0, 0, img_current->width, img_current->height);
@@ -754,8 +852,7 @@ malformed:  if(status != LOST)
 close:
         close(sock);
         sleeptime = refresh;
-        tstuff.status = status;
-        switch((ret = event_loop(root, tray, icon, tooltip, img_current, &tstuff, &pfds, sleeptime)))
+        switch((ret = event_loop(root, tray, icon, tooltip, img_current, &pfds, sleeptime)))
         {
         case -1:
             XDestroyWindow(disp, icon);
