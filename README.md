@@ -13,13 +13,19 @@ Invoke with the URL to your space API eg.
 
 spacestatus spaceapi.space.net
 
-## ico
+## icon
 
 The icons are accessed at $(bin)/../share/{open,closed,pending}.xpm.
 Replace/modify to change look.
 
+## signal
+
+If a SIGUSR1 signal is received the refresh is executed. This can be used
+with network up scripts to instantly receive and display the current status.
+
 ## options
 
+ - -v[v] verbose 
  - -r refresh in minutes
  - -p port
  - -t notification/bubble timeout

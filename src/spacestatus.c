@@ -107,7 +107,7 @@ struct tiptext
     int mallocd;
 };
 
-int sock, verbose;
+int sock, verbose, sigusr;
 struct addrinfo *res;
 char *req;
 Display *disp;
@@ -350,14 +350,13 @@ int connect_api(int *sock, char *dest, char *port)
     
     if((ret = getaddrinfo(dest, port, &hints, &res)))
     {
-        fprintf(stderr, "Failed to resolve destination: %s\n", gai_strerror(ret));
         close(*sock);
-        return 7;
+        return pverbose(7, "Failed to resolve destination: %s\n", gai_strerror(ret));
     }
     
     for(iter = res; iter; iter = iter->ai_next)
     {
-        ret = connect(*sock, iter->ai_addr, iter->ai_addrlen);
+        while((ret = connect(*sock, iter->ai_addr, iter->ai_addrlen)) == -1 && errno == EINTR);
         if(!ret)
             break;
     }
@@ -392,10 +391,14 @@ char* request(int sock, char *host, char *path, char **dst, int *size)
     
     while(!len || count < len)
     {
-        if((ret = recv(sock, *dst+count, *size-count, 0)) <= 0)
+        while((ret = recv(sock, *dst+count, *size-count, 0)) <= 0)
         {
             if(ret == -1)
+            {
+                if(errno == EINTR)
+                    continue;
                 perror("Failed to recv");
+            }
             return 0;
         }
         count += ret;
@@ -403,10 +406,14 @@ char* request(int sock, char *host, char *path, char **dst, int *size)
         {
             *size *= 2;
             *dst = realloc(*dst, *size);
-            if((ret = recv(sock, *dst+count, *size-count, 0)) <= 0)
+            while((ret = recv(sock, *dst+count, *size-count, 0)) <= 0)
             {
                 if(ret == -1)
+                {
+                    if(errno == EINTR)
+                        continue;
                     perror("Failed to recv");
+                }
                 return 0;
             }
             count += ret;
@@ -423,26 +430,36 @@ char* request(int sock, char *host, char *path, char **dst, int *size)
     return content;
 }
 
-void cleanup(int signal)
+void sighandler(int signal)
 {
-    close(sock);
-    free(req);
-    NOTIFY1(notify_uninit());
-    json_free(&json);
-    XDestroyImage(img_closed);
-    XDestroyImage(img_open);
-    XDestroyImage(img_pending);
-    XFreeGC(disp, gc);
-    XCloseDisplay(disp);
-    exit(0);
+    switch(signal)
+    {
+    case SIGINT:
+        close(sock);
+        free(req);
+        NOTIFY1(notify_uninit());
+        json_free(&json);
+        XDestroyImage(img_closed);
+        XDestroyImage(img_open);
+        XDestroyImage(img_pending);
+        XFreeGC(disp, gc);
+        XCloseDisplay(disp);
+        exit(0);
+    case SIGUSR1:
+        sigusr = 1;
+        break;
+    }
 }
 
 int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *img, struct pollfd *pfds, int sec)
 {
     XEvent e;
     struct timeval now, than;
-    int msec = sec*1000;
+    int msec, ret;
+    sigset_t set, oldset;
+    struct timespec delay;
     
+    msec = sec*1000;
     than.tv_sec = 0;
     
     while(1)
@@ -456,9 +473,36 @@ int event_loop(Window root, Window tray, Window icon, Window tooltip, XImage *im
         if(msec <= 0)
             return 0;
         
-        switch(poll(pfds, 1, msec))
+        delay.tv_sec = msec/1000;
+        delay.tv_nsec = (msec%1000)*1000000;
+        
+        sigfillset(&set);
+        sigprocmask(SIG_BLOCK, &set, &oldset);
+        
+        if(sigusr)
+        {
+            sigusr = 0;
+            sigprocmask(SIG_SETMASK, &oldset, 0);
+            pverbose(0, "received SIGUSR1\n");
+            return 0;
+        }
+        
+        ret = ppoll(pfds, 1, &delay, &oldset);
+        sigprocmask(SIG_SETMASK, &oldset, 0);
+        
+        switch(ret)
         {
         case -1:
+            if(errno == EINTR)
+            {
+                if(sigusr)
+                {
+                    sigusr = 0;
+                    pverbose(0, "received SIGUSR1\n");
+                    return 0;
+                }
+                continue;
+            }
             perror("Failed to poll display");
             return 9;
         case 0:
@@ -658,6 +702,7 @@ int main(int argc, char *argv[])
     }
     
     verbose = 0;
+    sigusr = 0;
     screen = DefaultScreen(disp);
     
     memset(&tstuff, 0, sizeof(struct tooltip_stuff));
@@ -781,7 +826,8 @@ int main(int argc, char *argv[])
     pfds.fd = ConnectionNumber(disp);
     pfds.events = POLLIN;
     
-    signal(SIGINT, cleanup);
+    signal(SIGINT, sighandler);
+    signal(SIGUSR1, sighandler);
     
 #ifdef NOTIFY
     notify_init(PACKAGE);
