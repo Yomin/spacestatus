@@ -270,33 +270,34 @@ void draw_text(Window root, Window tray, Window tooltip, struct tiptext tips[], 
 
 void show_tooltip(Window root, Window tray, Window tooltip)
 {
-    int sec;
+    int sec, tipcount = 1;
     struct tiptext tips[2];
     
     memset(tips, 0, 2*sizeof(struct tiptext));
     
-    asprintf(&tips[0].text, "Space: %s", tstuff.space);
-    tips[0].mallocd = 1;
-    
     switch(tstuff.status)
     {
     case PENDING:
-        tips[1].text = "pending...";
+        tips[0].text = "pending...";
         break;
     case OPEN:
     case CLOSED:
+        asprintf(&tips[0].text, "Space: %s", tstuff.space);
+        tips[0].mallocd = 1;
+        
         sec = difftime(time(0), tstuff.lastchange);
         asprintf(&tips[1].text, "Status: %s for %02i:%02i:%02i",
             tstuff.status==OPEN?"open":"closed",
             sec/3600, (sec/60)%60, sec%60);
         tips[1].mallocd = 1;
+        tipcount++;
         break;
     case LOST:
-        tips[1].text = "api parsing failed...";
+        tips[0].text = "api parsing failed...";
         break;
     }
     
-    draw_text(root, tray, tooltip, tips, 2);
+    draw_text(root, tray, tooltip, tips, tipcount);
 }
 
 Window dock_tray(int screen, Window icon, Window root)
@@ -614,8 +615,6 @@ int parse_api()
     if((status = parse_api_state(state)) == LOST)
         return status;
     
-    tstuff.status = status;
-    
     if((jp = json_get("{space:s", &json)))
         tstuff.space = jp->v.string;
     else
@@ -854,6 +853,7 @@ malformed:  if(status != LOST)
 close:
         close(sock);
         sleeptime = refresh;
+        tstuff.status = status;
         switch((ret = event_loop(root, tray, icon, tooltip, img_current, &pfds, sleeptime)))
         {
         case -1:
